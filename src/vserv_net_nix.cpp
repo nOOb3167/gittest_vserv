@@ -5,22 +5,25 @@
 
 #include <signal.h>
 #include <unistd.h>
+#include <fcntl.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/epoll.h>
 #include <pthread.h>
 
 #include <gittest/misc.h>
+#include <gittest/filesys.h>
 #include <gittest/vserv_net.h>
 
 /* intended to be forward-declared in header (API use pointer only) */
 struct GsVServCtl
 {
 	size_t mNumThread;
-	std::vector<pthread_t> mThread;
+	pthread_t *mThreadVec; size_t mThreadNum;
+	int *mSockFdVec; size_t mSockFdNum;
+	int *mEPollFdVec; size_t mEPollFdNum;
 	int mEvtFdExitReq;
 	int mEvtFdExit;
-	int mEPollFd;
 };
 
 struct GsEPollCtx
@@ -45,29 +48,87 @@ int gs_vserv_epollctx_add_for(
 {
 	int r = 0;
 
-	struct GsEPollCtx *EPollCtx = NULL;
-	struct GsVServConCtx *Ctx = NULL;
 	struct epoll_event Evt = {};
 
-	if (!!(r = CbCtxCreate(&Ctx, Type, Ext)))
+	struct GsEPollCtx **EvtDataPtr = (struct GsEPollCtx **) &Evt.data.ptr;
+
+	Evt.events = EPOLLIN | EPOLLET;    /* NOTE: no EPOLLONESHOT this time */
+	/* remainder effectively setting up Evt.data.ptr */
+	(*EvtDataPtr) = new GsEPollCtx();
+	(*EvtDataPtr)->mType = Type;
+	if (!!(r = CbCtxCreate(&(*EvtDataPtr)->mCtx, Type, Ext)))
 		GS_GOTO_CLEAN();
+	(*EvtDataPtr)->mCtx->mFd = GS_FDOWN(&Fd);
+	(*EvtDataPtr)->mCtx->mExt = Ext;
 
-	Ctx->mFd = GS_FDOWN(&Fd);
-	Ctx->mExt = Ext;
-	EPollCtx = new GsEPollCtx();
-	EPollCtx->mType = Type;
-	EPollCtx->mCtx = GS_ARGOWN(&Ctx);
-	Evt.events = EPOLLIN | EPOLLET | EPOLLONESHOT;
-	Evt.data.ptr = GS_ARGOWN(&EPollCtx);
-
-	if (-1 == epoll_ctl(EPollFd, EPOLL_CTL_ADD, ((struct GsEPollCtx *)Evt.data.ptr)->mCtx->mFd, &Evt))
+	if (-1 == epoll_ctl(EPollFd, EPOLL_CTL_ADD, (*EvtDataPtr)->mCtx->mFd, &Evt))
 		GS_ERR_CLEAN(1);
-	Evt.data.ptr = NULL;
+	(*EvtDataPtr) = NULL;
 
 clean:
-	GS_DELETE(&Evt.data.ptr, struct GsEPollCtx);
-	GS_DELETE_VF(&Ctx, CbCtxDestroy);
-	GS_DELETE(&EPollCtx, struct GsEPollCtx);
+	if ((*EvtDataPtr) && (*EvtDataPtr)->mCtx)
+		gs_close_cond(&(*EvtDataPtr)->mCtx->mFd);
+	if ((*EvtDataPtr))
+		GS_DELETE_VF(&(*EvtDataPtr)->mCtx, CbCtxDestroy);
+	GS_DELETE(&(*EvtDataPtr), struct GsEPollCtx);
+	gs_close_cond(&Fd);
+
+	return r;
+}
+
+int gs_vserv_ctl_create_part(
+	size_t ThreadNum,
+	struct GsVServCtl **oServCtl)
+{
+	int r = 0;
+
+	struct GsVServCtl *ServCtl = new GsVServCtl();
+
+	*ServCtl = {};
+	ServCtl->mThreadNum = ThreadNum;
+	ServCtl->mThreadVec = new pthread_t[ThreadNum];
+	ServCtl->mSockFdNum = ThreadNum;
+	ServCtl->mSockFdVec = new int[ThreadNum];
+	for (size_t i = 0; i < ThreadNum; i++)
+		ServCtl->mSockFdVec[i] = -1;
+	ServCtl->mEPollFdNum = ThreadNum;
+	ServCtl->mEPollFdVec = new int[ThreadNum];
+	for (size_t i = 0; i < ThreadNum; i++)
+		ServCtl->mEPollFdVec[i] = -1;
+	if (! ServCtl->mThreadVec || ! ServCtl->mSockFdVec || ! ServCtl->mEPollFdVec)
+		GS_ERR_CLEAN(1);
+
+	// thread requesting exit 0 -> 1 -> 0
+	if (-1 == (ServCtl->mEvtFdExitReq = eventfd(0, EFD_CLOEXEC | EFD_SEMAPHORE)))
+		GS_ERR_CLEAN(1);
+	// controller (servctl) ordering exit 0 -> NumThread -> -=1 -> .. -> 0
+	if (-1 == (ServCtl->mEvtFdExit = eventfd(0, EFD_CLOEXEC | EFD_SEMAPHORE)))
+		GS_ERR_CLEAN(1);
+
+	/* create epoll sets */
+
+	for (size_t i = 0; i < ThreadNum; i++)
+		if (-1 == (ServCtl->mEPollFdVec[i] = epoll_create1(EPOLL_CLOEXEC)))
+			GS_ERR_CLEAN(1);
+
+	if (oServCtl)
+		*oServCtl = GS_ARGOWN(&ServCtl);
+
+clean:
+	if (ServCtl)
+		for (size_t i = 0; i < ThreadNum; i++)
+			gs_close_cond(ServCtl->mEPollFdVec + i);
+	if (ServCtl)
+		gs_close_cond(&ServCtl->mEvtFdExit);
+	if (ServCtl)
+		gs_close_cond(&ServCtl->mEvtFdExitReq);
+	if (ServCtl)
+		GS_DELETE_ARRAY(&ServCtl->mThreadVec, pthread_t);
+	if (ServCtl)
+		GS_DELETE_ARRAY(&ServCtl->mSockFdVec, int);
+	if (ServCtl)
+		GS_DELETE_ARRAY(&ServCtl->mEPollFdVec, int);
+	GS_DELETE(&ServCtl, struct GsVServCtl);
 
 	return r;
 }
@@ -103,8 +164,7 @@ int gs_vserv_sockets_create(
 		if (0 == bind(TmpFd, Rp->ai_addr, Rp->ai_addrlen))
 			RpFound = true;
 
-		close(TmpFd);
-		TmpFd = -1;
+		gs_close_cond(&TmpFd);
 
 		if (RpFound)
 			break;
@@ -126,30 +186,12 @@ int gs_vserv_sockets_create(
 clean:
 	if (!!r) {
 		for (size_t i = 0; i < SockFdNum; i++)
-			if (ioSockFdVec[i] != -1) {
-				close(ioSockFdVec[i]);
-				ioSockFdVec[i] = -1;
-			}
+			gs_close_cond(ioSockFdVec + i);
 	}
 
-	if (TmpFd != -1)
-		close(TmpFd);
+	gs_close_cond(&TmpFd);
 	if (Res)
 		freeaddrinfo(Res);
-
-	return r;
-}
-
-int stuff(int argc, char **argv)
-{
-	int r = 0;
-
-	int ListenFd = -1;
-
-	if (!!(r = gs_vserv_net_sockets_create("3757", &ListenFd, 1)))
-		GS_GOTO_CLEAN();
-
-clean:
 
 	return r;
 }
@@ -164,74 +206,56 @@ int gs_vserv_start_2(
 
 	struct GsVServCtl *ServCtl = NULL;
 
-	std::vector<pthread_t> Thread;
+	size_t ThreadNum = ServFdNum;
+	size_t ThreadsInitedCnt = 0;
+	bool AttrInited = false;
+	pthread_attr_t Attr = {};
 
-	size_t NumThread = ServFdNum;
-
-	// thread requesting exit 0 -> 1 -> 0
-	int EvtFdExitReq = -1;
-	// controller (this) ordering exit 0 -> NumThread -> -=1 -> .. -> 0
-	int EvtFdExit = -1;
-	int EPollFd = -1;
-
-	if (-1 == (EvtFdExitReq = eventfd(0, EFD_CLOEXEC | EFD_SEMAPHORE)))
-		GS_ERR_CLEAN(1);
-
-	if (-1 == (EvtFdExit = eventfd(0, EFD_CLOEXEC | EFD_SEMAPHORE)))
-		GS_ERR_CLEAN(1);
-
-	if (-1 == (EPollFd = epoll_create1(EPOLL_CLOEXEC)))
-		GS_ERR_CLEAN(1);
-
-	if (!!(r = CbCtxCreate(&ExitCtx, XS_SOCK_TYPE_EVENT, Ext)))
+	if (!!(r = gs_vserv_ctl_create_part(ThreadNum, &ServCtl)))
 		GS_GOTO_CLEAN();
 
-	ExitCtx->mFd = EvtFdExit;
-	ExitCtx->mExt = Ext;
-	ExitEPollCtx = new XsEPollCtx();
-	ExitEPollCtx->mType = XS_SOCK_TYPE_EVENT;
-	ExitEPollCtx->mCtx = ExitCtx;
-	ExitEvt.events = EPOLLIN | EPOLLET | EPOLLONESHOT;
-	ExitEvt.data.ptr = ExitEPollCtx;
+	/* add socks and exit events to epoll sets */
 
-	if (-1 == epoll_ctl(EPollFd, EPOLL_CTL_ADD, ExitCtx->mFd, &ExitEvt))
-		GS_ERR_CLEAN(1);
+	for (size_t i = 0; i < ThreadNum; i++) {
+		int DupedFdExit = dup(ServCtl->mEvtFdExit);
+		while (-1 == dup3(ServCtl->mEvtFdExit, DupedFdExit, O_CLOEXEC)) {
+			if (errno == EINTR || errno == EBUSY)
+				continue;
+			GS_ERR_CLEAN_J(initfdexit, 1);
+		}
+		if (!!(r = gs_vserv_epollctx_add_for(ServCtl->mEPollFdVec[i], GS_FDOWN(&DupedFdExit), GS_SOCK_TYPE_EVENT, CbCtxCreate, Ext)))
+			GS_GOTO_CLEAN();
+		if (!!(r = gs_vserv_epollctx_add_for(ServCtl->mEPollFdVec[i], GS_FDOWN(&xxxxx), GS_SOCK_TYPE_NORMAL, CbCtxCreate, Ext)))
+			GS_GOTO_CLEAN();
+	clean_initfdexit:
+		gs_close_cond(&DupedFdExit);
+		if (!!r)
+			GS_GOTO_CLEAN();
+	}
 
-	if (!!(r = CbCtxCreate(&SockCtx, XS_SOCK_TYPE_LISTEN, Ext)))
-		GS_GOTO_CLEAN();
+	/* create threads */
 
-	SockCtx->mFd = ListenFd;
-	SockCtx->mExt = Ext;
-	SockEPollCtx = new XsEPollCtx();
-	SockEPollCtx->mType = XS_SOCK_TYPE_LISTEN;
-	SockEPollCtx->mCtx = SockCtx;
-	SockEvt.events = EPOLLIN | EPOLLET | EPOLLONESHOT;
-	SockEvt.data.ptr = SockEPollCtx;
+	if (!!(r = pthread_attr_init(&Attr)))
+		GS_GOTO_CLEAN_J(initthr);
+	AttrInited = true;
 
-	if (-1 == epoll_ctl(EPollFd, EPOLL_CTL_ADD, SockCtx->mFd, &SockEvt))
-		GS_ERR_CLEAN(1);
-
-	for (size_t i = 0; i < NumThread; i++)
-		ThreadRecv.push_back(std::make_shared<std::thread>(receiver_func, i, EPollFd, EvtFdExitReq));
-
-	ServCtl = new XsServCtl();
-	ServCtl->mNumThread = NumThread;
-	ServCtl->mThread = ThreadRecv;
-	ServCtl->mEvtFdExitReq = EvtFdExitReq;
-	ServCtl->mEvtFdExit = EvtFdExit;
-	ServCtl->mEPollFd = EPollFd;
+	for (size_t i = 0; i < NumThread; i++) {
+		if (!!(r = pthread_create(ServCtx->mThreadVec + i, &Attr, receiver_func, NULL)))
+			GS_GOTO_CLEAN();
+		ThreadsInitedCnt++;
+	}
 
 	if (oServCtl)
-		*oServCtl = ServCtl;
+		*oServCtl = GS_ARGOWN(&ServCtl);
 
 clean:
-	if (!!r) {
-		GS_DELETE_F(&ServCtl, xs_serv_ctl_destroy);
-		GS_DELETE_VF(&SockCtx, CbCtxDestroy);
-		GS_DELETE(&SockEPollCtx, struct XsEPollCtx);
-		GS_DELETE_VF(&ExitCtx, CbCtxDestroy);
-		GS_DELETE(&ExitEPollCtx, struct XsEPollCtx);
-	}
+	if (AttrInited)
+		if (!!(r = pthread_attr_destroy(&Attr)))
+			GS_ASSERT(0);
+	GS_DELETE_F(&ServCtl, gs_vserv_ctl_destroy);
+
+	for (size_t i = 0; i < ServFdNum; i++)
+		gs_close_cond(ServFdVec + i);
 
 	return r;
 }
@@ -254,10 +278,8 @@ int gs_vserv_start(struct GsAuxConfigCommonVars *CommonVars)
 
 	if (!!(r = gs_vserv_start_2(ServFd.data(), ServFd.size(), cbctxcreate, Ext, &ServCtl)))
 		GS_GOTO_CLEAN();
-	/* transfer ownership */
-	for (size_t i = 0; i < ServFd.size(); i++)
-		if (ServFd[i] != -1)
-			close(ServFd[i]);
+	for (size_t i = 0; i < ServFd.size(); i++) /* transfer ownership */
+		gs_close_cond(&ServFd[i]);
 
 	if (!!(r = gs_vserv_ctl_quit_wait(ServCtl)))
 		GS_GOTO_CLEAN();
@@ -266,8 +288,21 @@ clean:
 	GS_DELETE(&Ext, struct GsVServConExt);
 	GS_DELETE_F(&ServCtl, gs_vserv_ctl_destroy);
 	for (size_t i = 0; i < ServFd.size(); i++)
-		if (ServFd[i] != -1)
-			close(ServFd[i]);
+		gs_close_cond(&ServFd[i]);
+
+	return r;
+}
+
+int stuff(int argc, char **argv)
+{
+	int r = 0;
+
+	int ListenFd = -1;
+
+	if (!!(r = gs_vserv_net_sockets_create("3757", &ListenFd, 1)))
+		GS_GOTO_CLEAN();
+
+clean:
 
 	return r;
 }

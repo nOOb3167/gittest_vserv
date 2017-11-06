@@ -32,6 +32,9 @@ struct GsVServConCtx
 
 typedef int(*gs_cb_vserv_con_ctx_create_t)(struct GsVServConCtx **oCtxBase, enum GsSockType Type, struct GsVServConExt *Ext);
 
+int gs_vserv_ctl_create_part(
+	size_t ThreadNum,
+	struct GsVServCtl **oServCtl);
 int gs_vserv_ctl_destroy(struct GsVServCtl *ServCtl);
 int gs_vserv_ctl_quit_request(struct GsVServCtl *ServCtl);
 int gs_vserv_ctl_quit_wait(struct GsVServCtl *ServCtl);
