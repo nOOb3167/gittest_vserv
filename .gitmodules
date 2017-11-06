@@ -1,0 +1,3 @@
+[submodule "gittest_common"]
+	path = gittest_common
+	url = https://github.com/nOOb3167/gittest_common.git
