@@ -5,6 +5,8 @@
 
 #include <gittest/config.h>
 
+#define GS_ADDR_RAWHASH_BUCKET(RAWHASH, NUM_BUCKETS) ((RAWHASH) % (NUM_BUCKETS))
+
 /* intended to be forward-declared in header (API use pointer only) */
 struct GsVServCtl;
 struct GsVServRespond;
@@ -15,6 +17,11 @@ struct GsAddr;
 struct gs_addr_hash_t { size_t operator()(const struct GsAddr &k) const; };
 struct gs_addr_equal_t { bool operator()(const GsAddr &a, const GsAddr &b) const; };
 #endif /* __cplusplus */
+
+/* receives pointer (Data) to the to-be-deleted data pointer (*Data)
+   deletion must be skipped if *Data is NULL
+   deletion must cause *Data to become NULL */
+typedef int (*gs_data_deleter_t)(char **Data);
 
 enum GsSockType
 {
@@ -43,6 +50,11 @@ int gs_vserv_ctl_create_finish(
 int gs_vserv_ctl_destroy(struct GsVServCtl *ServCtl);
 int gs_vserv_ctl_quit_request(struct GsVServCtl *ServCtl);
 int gs_vserv_ctl_quit_wait(struct GsVServCtl *ServCtl);
+
+size_t gs_addr_rawhash(struct GsAddr *Addr)
+{
+	return gs_addr_hash_t()(*Addr);
+}
 
 int gs_vserv_write_create(
 	struct GsVServWrite **oWrite)
@@ -73,6 +85,15 @@ int gs_vserv_write_destroy(struct GsVServWrite *Write)
 		if (!! pthread_mutex_destroy(&Write->mMutex))
 			GS_ASSERT(0);
 		GS_DELETE(&Write, struct GsVServWrite);
+	}
+	return 0;
+}
+
+int gs_vserv_write_elt_del_free(char **DataBuf)
+{
+	if (*DataBuf) {
+		free(*DataBuf);
+		*DataBuf = NULL;
 	}
 	return 0;
 }
@@ -179,52 +200,58 @@ clean:
 	return r;
 }
 
-int gs_vserv_write_elt_del_free(char **DataBuf)
-{
-	if (*DataBuf) {
-		free(*DataBuf);
-		*DataBuf = NULL;
-	}
-	return 0;
-}
-
-int gs_vserv_respond_enqueue(struct GsVServRespond *Respond, struct GsAddr *Addr, char *DataBuf, size_t LenData)
+int gs_vserv_write_drain_pre(struct GsVServCtl *ServCtl, size_t ThreadIdx)
 {
 	int r = 0;
 
-	struct GsVServCtl *ServCtl = Respond->mServCtl;
+	struct GsVServWritePre *WritePre = ServCtl->mWritePreVec[ThreadIdx];
+	struct GsVServWrite *Write = ServCtl->mWriteVec[ThreadIdx];
 
-	struct GsVServWrite *Write = ServCtl->mWriteVec[Respond->mSockFdIdx];
-	int Fd = ServCtl->mSockFdVec[Respond->mSockFdIdx];
 	int HaveLock = 0;
+	size_t EntryVecLen = 0;
+	struct GsVServWritePreEntry *EntryVec = NULL;
+	size_t Cnt = 0;
 
-	if (Fd == -1)
-		GS_ERR_CLEAN(1);
+	/* first copy WritePre to a temporary area first for shorter lock hold */
 
-	if (!!(r = pthread_mutex_lock(&Write->mMutex)))
+	if (!!(r = pthread_mutex_lock(& WritePre->mMutex)))
 		GS_GOTO_CLEAN();
 	HaveLock = 1;
 
-	// FIXME: not implemented yet
-	if (Write->mTryAtOnce) {}
+	// FIXME: maybe maintain a lockless emptiness bit in WritePre, allowing lock skip on empty queue
 
-	{
+	EntryVecLen = WritePre->mQueue.size();
+	EntryVec = (struct GsVServWritePreEntry *) alloca(sizeof(GsVServWritePreEntry) * EntryVecLen);
+
+	for (auto it = WritePre->mQueue.begin(); it != WritePre->mQueue.end(); ++it, ++Cnt)
+		new (EntryVec + Cnt) GsVServWritePreEntry(*it);  // FIXME: placement new considered harmful
+	WritePre->mQueue.clear();
+
+	if (!! pthread_mutex_lock(& WritePre->mMutex))
+		GS_ASSERT(0);
+	HaveLock = 0;
+
+	/* second transfer WritePre into Write */
+
+	/* there are two parts to Write: AddrInFlight and Queue
+	     AddrInFlight records Elts keyed per Addr
+		 Queue essentially puts a traversal order on AddrInFlight */
+	/* AddrInFligh entry may need to be created, or is just appended-to */
+
+	for (size_t i = 0; i < EntryVecLen; i++) {
 		/* ensure Addr is or becomes handled by 'Write' (presence of map entry) */
-		gs_inflight_map_t::iterator it = Write->mAddrInFlight.find(*Addr);
+		gs_inflight_map_t::iterator it = Write->mAddrInFlight.find(EntryVec[i].mAddr);
 		if (it == Write->mAddrInFlight.end()) {
 			struct GsVServWriteEntry Entry;
 			Entry.mQueuedAlready = false;
-			Entry.mAddr = *Addr;
-			Entry.mElt; /*dummy*/
+			Entry.mAddr = EntryVec[i].mAddr;
+			Entry.mElt;
 			auto itb = Write->mAddrInFlight.insert(std::make_pair(Entry.mAddr, std::move(Entry)));
 			GS_ASSERT(itb.second);
 			it = itb.first;
 		}
 		/* queue the data */
-		struct GsVServWriteElt Elt = {};
-		Elt.mData = std::shared_ptr<char>(DataBuf, gs_vserv_write_elt_del_free);
-		Elt.mLenData = LenData;
-		it->second.mElt.push_back(std::move(Elt));
+		it->second.mElt.push_back(std::move(EntryVec[i].mElt));
 		/* ensure Addr (map entry) is in the ready list / queue */
 		if (! it->second.mQueuedAlready) {
 			Write->mQueue.push_back(it);
@@ -233,9 +260,67 @@ int gs_vserv_respond_enqueue(struct GsVServRespond *Respond, struct GsAddr *Addr
 	}
 
 clean:
+	if (EntryVec)
+		for (size_t i = 0; i < EntryVecLen; i++)
+			EntryVec[i].~GsVServWritePreEntry();  // FIXME: explicit destructor call due placement new
 	if (HaveLock)
-		if (!! pthread_mutex_unlock(&Write->mMutex))
+		if (!! pthread_mutex_unlock(& WritePre->mMutex))
 			GS_ASSERT(0);
+
+	return r;
+}
+
+int gs_vserv_respond_enqueue(
+	struct GsVServRespond *Respond,
+	gs_data_deleter_t DataDeleter,
+	char **EntryDataVec, /*owned*/
+	size_t *EntryLenDataVec,
+	struct GsAddr *EntryAddrVec,
+	size_t LenEntryVecs)
+{
+	int r = 0;
+
+	struct GsVServCtl *ServCtl = Respond->mServCtl;
+
+	size_t *HashVec = (size_t *) alloca(sizeof (size_t) * LenEntryVecs);
+
+	/* LockIdxToTake[i] values: 0 - ignore lock; 1 - want lock; 2 - taken lock */
+	char *LockIdxToTake = (char *) alloca(ServCtl->mThreadNum);
+
+	memset(LockIdxToTake, '\0', ServCtl->mThreadNum);
+
+	for (size_t i = 0; i < LenEntryVecs; i++) {
+		HashVec[i] = gs_addr_rawhash(EntryAddrVec + i);
+		LockIdxToTake[GS_ADDR_RAWHASH_BUCKET(HashVec[i], ServCtl->mThreadNum)] = 1;
+	}
+
+	/* note iterating sequence [0,ThreadNum) determines lock order (by ascending thread idx) */
+	/* currently all locks are obtained at once but could be refactored for one-by-one */
+
+	for (size_t i = 0; i < ServCtl->mThreadNum; i++) {
+		if (LockIdxToTake[i] == 1) {
+			if (!!(r = pthread_mutex_lock(& ServCtl->mWritePreVec[i]->mMutex)))
+				GS_GOTO_CLEAN();
+			LockIdxToTake[i] = 2;
+		}
+	}
+
+	for (size_t i = 0; i < LenEntryVecs; i++) {
+		struct GsVServWritePreEntry Entry;
+		Entry.mAddr = EntryAddrVec[i];
+		Entry.mElt.mLenData = EntryLenDataVec[i];
+		Entry.mElt.mData = std::shared_ptr<struct GsVServWriteElt>(EntryDataVec[i], DataDeleter);
+		EntryDataVec[i] = NULL;
+		ServCtl->mWritePreVec[HashVec[i]]->mQueue.push_back(std::move(Entry));
+	}
+
+clean:
+	for (size_t i = 0; i < ServCtl->mThreadNum; i++) {
+		if (LockIdxToTake[i] == 2) {
+			if (!! pthread_mutex_unlock(& ServCtl->mWritePreVec[i]->mMutex))
+				GS_ASSERT(0);
+		}
+	}
 
 	return r;
 }

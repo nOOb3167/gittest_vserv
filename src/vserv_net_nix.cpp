@@ -8,6 +8,7 @@
 #include <deque>
 #include <map>
 
+#include <alloca.h>
 #include <signal.h>
 #include <unistd.h>
 #include <fcntl.h>
@@ -37,6 +38,7 @@ struct GsVServCtl
 	pthread_t *mThreadVec; size_t mThreadNum;
 	int *mSockFdVec; size_t mSockFdNum;
 	int *mEPollFdVec; size_t mEPollFdNum;
+	struct GsVServWritePre **mWritePreVec; size_t mWritePreNum;
 	struct GsVServWrite **mWriteVec; size_t mWriteNum;
 	int mEvtFdExitReq;
 	int mEvtFdExit;
@@ -69,6 +71,17 @@ struct GsVServWrite
 	bool mTryAtOnce;
 	gs_inflight_map_t mAddrInFlight;
 	std::deque<gs_inflight_map_t::iterator> mQueue;
+};
+
+struct GsVServWritePreEntry
+{
+	struct GsAddr mAddr;
+	struct GsVServWriteElt mElt;
+};
+
+struct GsVServWritePre
+{
+	std::deque<GsVServWritePreEntry> mQueue;
 	pthread_mutex_t mMutex;
 };
 
