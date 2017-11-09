@@ -2,8 +2,11 @@
 #include <cstdlib>
 
 #include <functional>  // std::hash
+#include <utility>
+#include <memory>
 #include <vector>
 #include <deque>
+#include <map>
 
 #include <signal.h>
 #include <unistd.h>
@@ -22,11 +25,10 @@
 #define GS_VSERV_SEND_NUMIOVEC 3
 #define GS_VSERV_UDP_SIZE_MAX 65535
 
-struct GsVServRespond
-{
-	struct GsVServCtl *mServCtl;
-	size_t mSockIdx;
-};
+struct GsAddr;
+struct GsVServWriteEntry;
+// FIXME: unordered_map may be possible https://stackoverflow.com/questions/16781886/can-we-store-unordered-maptiterator/16782536#16782536
+typedef std::map<struct GsAddr, struct GsVServWriteEntry> gs_inflight_map_t;
 
 /* intended to be forward-declared in header (API use pointer only) */
 struct GsVServCtl
@@ -41,11 +43,22 @@ struct GsVServCtl
 	struct GsVServCtlCb *mCb;
 };
 
+struct GsVServRespond
+{
+	struct GsVServCtl *mServCtl;
+	size_t mSockIdx;
+};
+
 struct GsVServWriteElt
 {
-	char *mDataBuf; size_t mLenData;
-	int(*mDel)(char **DataBuf);
+	std::shared_ptr<char> mData; size_t mLenData;
+};
+
+struct GsVServWriteEntry
+{
+	bool mQueuedAlready;
 	struct GsAddr mAddr;
+	std::deque<GsVServWriteElt> mElt;
 };
 
 /** @sa
@@ -54,7 +67,8 @@ struct GsVServWriteElt
 struct GsVServWrite
 {
 	bool mTryAtOnce;
-	std::deque<struct GsVServWriteElt> mQueue;
+	gs_inflight_map_t mAddrInFlight;
+	std::deque<gs_inflight_map_t::iterator> mQueue;
 	pthread_mutex_t mMutex;
 };
 
