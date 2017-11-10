@@ -1,5 +1,6 @@
 #include <cassert>
 #include <cstdlib>
+#include <cstring>
 
 #include <functional>  // std::hash
 #include <utility>
@@ -12,9 +13,11 @@
 #include <signal.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <netdb.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/epoll.h>
+#include <sys/eventfd.h>
 #include <pthread.h>
 
 #include <gittest/misc.h>
@@ -31,7 +34,11 @@ struct GsVServWriteEntry;
 // FIXME: unordered_map may be possible https://stackoverflow.com/questions/16781886/can-we-store-unordered-maptiterator/16782536#16782536
 typedef std::map<struct GsAddr, struct GsVServWriteEntry> gs_inflight_map_t;
 
-/* intended to be forward-declared in header (API use pointer only) */
+struct GsAddr
+{
+	struct sockaddr_in mAddr;
+};
+
 struct GsVServCtl
 {
 	size_t mNumThread;
@@ -43,6 +50,12 @@ struct GsVServCtl
 	int mEvtFdExitReq;
 	int mEvtFdExit;
 	struct GsVServCtlCb *mCb;
+};
+
+struct GsVServPthreadCtx
+{
+  struct GsVServCtl *mServCtl;
+  size_t mSockIdx;
 };
 
 struct GsVServRespond
@@ -69,11 +82,6 @@ struct GsVServWrite
 {
 	bool mTryAtOnce;
 	std::deque<GsVServWriteEntry> mQueue;
-};
-
-struct GsAddr
-{
-	struct sockaddr_in mAddr;
 };
 
 struct GsEPollCtx
@@ -108,7 +116,8 @@ static int gs_vserv_receive_writable(
 	struct GsVServCtl *ServCtl,
 	struct GsEPollCtx *EPollCtx);
 static int gs_vserv_receive_func(
-	struct GsVServCtl *ServCtl);
+	struct GsVServCtl *ServCtl,
+	size_t SockIdx);
 static void * gs_vserv_receive_func_pthread(
 	void *arg);
 static int gs_vserv_epollctx_add_for(
@@ -129,6 +138,11 @@ bool gs_addr_equal_t::operator()(const GsAddr &a, const GsAddr &b) const {
 	return a.mAddr.sin_family == b.mAddr.sin_family
 		&& a.mAddr.sin_port == b.mAddr.sin_port
 		&& a.mAddr.sin_addr.s_addr == b.mAddr.sin_addr.s_addr;
+}
+
+size_t gs_addr_rawhash(struct GsAddr *Addr)
+{
+	return gs_addr_hash_t()(*Addr);
 }
 
 int gs_eventfd_read(int EvtFd)
@@ -192,6 +206,7 @@ int gs_vserv_receive_evt_normal(
 		socklen_t AddrSize = sizeof Addr;
 		struct GsPacket Packet = {};
 		struct GsAddr Address = {};
+		struct GsVServRespond Respond = {};
 		while (-1 == (NRecv = recvfrom(Fd, UdpBuf, LenUdp, MSG_TRUNC, (struct sockaddr *)&Addr, &AddrSize))) {
 			if (errno == EINTR)
 				continue;
@@ -211,7 +226,9 @@ int gs_vserv_receive_evt_normal(
 		Packet.data = (uint8_t *)UdpBuf;
 		Packet.dataLength = LenUdp;
 		Address.mAddr = Addr;
-		if (!!(r = ServCtl->mCb->CbCrank(ServCtl->mCb, &Packet, &Address)))
+		Respond.mServCtl = ServCtl;
+		Respond.mSockIdx = EPollCtx->mSockIdx;
+		if (!!(r = ServCtl->mCb->CbCrank(ServCtl->mCb, &Packet, &Address, &Respond)))
 			GS_GOTO_CLEAN();
 	}
 
@@ -258,20 +275,24 @@ clean:
 }
 
 int gs_vserv_receive_func(
-	struct GsVServCtl *ServCtl)
+	struct GsVServCtl *ServCtl,
+	size_t SockIdx)
 {
 	int r = 0;
 
 	char *UdpBuf = NULL;
 	size_t LenUdp = 0;
-	
+
 	if (!(UdpBuf = (char *)malloc(GS_VSERV_UDP_SIZE_MAX)))
 		GS_ERR_CLEAN(1);
 	LenUdp = GS_VSERV_UDP_SIZE_MAX;
 
 	while (true) {
+		int EPollFd = -1;
 		struct epoll_event Events[GS_VSERV_EPOLL_NUMEVENTS] = {};
 		int NReady = 0;
+
+		EPollFd = ServCtl->mEPollFdVec[SockIdx];
 
 		/* https://lkml.org/lkml/2011/11/17/234
 		     epoll_wait completing on fd registered with MASK
@@ -288,7 +309,7 @@ int gs_vserv_receive_func(
 
 		for (int i = 0; i < NReady; i++) {
 			struct GsEPollCtx *EPollCtx = (struct GsEPollCtx *) Events[i].data.ptr;
-			
+
 			GS_ASSERT(EPollCtx->mServCtl == ServCtl);
 
 			if (Events[i].events & EPOLLIN) {
@@ -344,14 +365,18 @@ void * gs_vserv_receive_func_pthread(
 {
 	int r = 0;
 
-	struct GsVServCtl *ServCtl = (struct GsVServCtl *) arg;
+	struct GsVServPthreadCtx *Ctx = (struct GsVServPthreadCtx *) arg;
+	struct GsVServCtl *ServCtl = Ctx->mServCtl;
+	size_t SockIdx = Ctx->mSockIdx;
 
 	log_guard_t Log(GS_LOG_GET("serv"));
 
-	if (!!(r = gs_vserv_receive_func(ServCtl)))
+	if (!!(r = gs_vserv_receive_func(ServCtl, SockIdx)))
 		GS_GOTO_CLEAN();
 
 clean:
+	GS_DELETE(&Ctx, struct GsVServPthreadCtx);
+
 	if (!!r)
 		GS_ASSERT(0);
 
@@ -388,6 +413,8 @@ clean:
 
 	return r;
 }
+
+
 
 int gs_vserv_ctl_create_part(
 	size_t ThreadNum,
@@ -500,8 +527,12 @@ int gs_vserv_ctl_create_finish(
 	AttrInited = true;
 
 	for (size_t i = 0; i < ServCtl->mNumThread; i++) {
-		if (!!(r = pthread_create(ServCtx->mThreadVec + i, &Attr, receiver_func, ServCtl)))
+		struct GsVServPthreadCtx *Ctx = new GsVServPthreadCtx();
+		Ctx->mServCtl = ServCtl;
+		Ctx->mSockIdx = i;
+		if (!!(r = pthread_create(ServCtl->mThreadVec + i, &Attr, gs_vserv_receive_func_pthread, Ctx)))
 			GS_GOTO_CLEAN();
+		Ctx = NULL;
 		ThreadsInitedCnt++;
 	}
 
@@ -509,6 +540,146 @@ clean:
 	if (AttrInited)
 		if (!!(r = pthread_attr_destroy(&Attr)))
 			GS_ASSERT(0);
+
+	return r;
+}
+
+int gs_vserv_write_create(
+	struct GsVServWrite **oWrite)
+{
+	int r = 0;
+
+	struct GsVServWrite *Write = NULL;
+
+	Write = new GsVServWrite();
+	Write->mTryAtOnce = false;
+	Write->mQueue;
+
+	if (oWrite)
+		*oWrite = GS_ARGOWN(&Write);
+
+clean:
+	GS_DELETE(&Write, struct GsVServWrite);
+
+	return r;
+}
+
+int gs_vserv_write_destroy(struct GsVServWrite *Write)
+{
+	if (Write) {
+		GS_DELETE(&Write, struct GsVServWrite);
+	}
+	return 0;
+}
+
+int gs_vserv_write_elt_del_free(char **DataBuf)
+{
+	if (*DataBuf) {
+		free(*DataBuf);
+		*DataBuf = NULL;
+	}
+	return 0;
+}
+
+int gs_vserv_write_elt_del_sp_func(char *DataBuf)
+{
+	free(DataBuf);
+	return 0;
+}
+
+/**
+	for epoll(2) EPOLLET edge-triggered mode specifically, writing until EAGAIN is important
+	  as no further EPOLLOUT (writability) events will be received otherwise (socket remains writable)
+*/
+int gs_vserv_write_drain_to(struct GsVServCtl *ServCtl, size_t SockIdx, int *oHaveEAGAIN)
+{
+	int r = 0;
+
+	struct GsVServWrite *Write = ServCtl->mWriteVec[SockIdx];
+	int Fd = ServCtl->mSockFdVec[SockIdx];
+
+	int HaveEAGAIN = 0;
+
+	std::deque<GsVServWriteEntry>::iterator it;
+
+	if (Write->mQueue.empty())
+		GS_ERR_NO_CLEAN(0);
+
+	for (it = Write->mQueue.begin(); it != Write->mQueue.end(); ++it) {
+		ssize_t NSent = 0;
+		while (-1 == (NSent = sendto(Fd, it->mElt.mData.get(), it->mElt.mLenData, MSG_NOSIGNAL, (struct sockaddr *) &it->mAddr.mAddr, sizeof it->mAddr.mAddr))) {
+			if (errno == EINTR)
+				continue;
+			if (errno == EAGAIN || errno == EWOULDBLOCK) {
+				HaveEAGAIN = 1;
+				goto donewriting;
+			}
+			GS_ERR_CLEAN(1);
+		}
+	}
+donewriting:
+	Write->mQueue.erase(Write->mQueue.begin(), it);
+
+noclean:
+	if (oHaveEAGAIN)
+		*oHaveEAGAIN = HaveEAGAIN;
+
+clean:
+
+	return r;
+}
+
+/** WARNING: this function is affected by caller CPU
+      the designed flow is: x-th receiver calls crank with 'Respond',
+	  crank on x-th receiver calls ex gs_vserv_respond_enqueue.
+	  maybe should just acquire mutexes */
+int gs_vserv_respond_enqueue(
+	struct GsVServRespond *Respond,
+	gs_data_deleter_t DataDeleter,
+	gs_data_deleter_sp_t DataDeleterSp,
+	char **EntryDataVec, /*owned*/
+	size_t *EntryLenDataVec,
+	struct GsAddr *EntryAddrVec,
+	size_t LenEntryVecs)
+{
+	int r = 0;
+
+	struct GsVServCtl *ServCtl = Respond->mServCtl;
+	struct GsVServWrite *Write = ServCtl->mWriteVec[Respond->mSockIdx];
+	int Fd = ServCtl->mSockFdVec[Respond->mSockIdx];
+
+	size_t NumWrite = 0;
+
+	/* feature may send some messages immediately */
+
+	if (Write->mTryAtOnce) {
+		for (size_t NumWrite = 0; NumWrite < LenEntryVecs; NumWrite++) {
+			ssize_t NSent = 0;
+			while (-1 == (NSent = sendto(Fd, EntryDataVec[NumWrite], EntryLenDataVec[NumWrite], MSG_NOSIGNAL, (struct sockaddr *) &EntryAddrVec[NumWrite].mAddr, sizeof EntryAddrVec[NumWrite].mAddr))) {
+				if (errno == EINTR)
+					continue;
+				if (errno == EAGAIN || errno == EWOULDBLOCK)
+					goto donewriting;
+				GS_ERR_CLEAN(1);
+			}
+			if (!! DataDeleter(&EntryDataVec[NumWrite]))
+				GS_ASSERT(0);
+		}
+	}
+donewriting:
+
+	/* queue any not yet sent */
+
+	for (size_t i = NumWrite; i < LenEntryVecs; i++) {
+		struct GsVServWriteEntry Entry;
+		Entry.mAddr = EntryAddrVec[i];
+		Entry.mElt.mLenData = EntryLenDataVec[i];
+		Entry.mElt.mData = std::move(std::shared_ptr<char>(EntryDataVec[i], DataDeleterSp));
+		EntryDataVec[i] = NULL;
+		Write->mQueue.push_back(std::move(Entry));
+	}
+
+clean:
 
 	return r;
 }
@@ -646,7 +817,7 @@ int stuff(int argc, char **argv)
 
 	int ListenFd = -1;
 
-	if (!!(r = gs_vserv_net_sockets_create("3757", &ListenFd, 1)))
+	if (!!(r = gs_vserv_sockets_create("3757", &ListenFd, 1)))
 		GS_GOTO_CLEAN();
 
 clean:
