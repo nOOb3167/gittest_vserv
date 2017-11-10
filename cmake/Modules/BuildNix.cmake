@@ -6,6 +6,7 @@ SET(GITTEST_VSERV_HEADERS
 )
 SET(GITTEST_VSERV_SOURCES
   src/vserv_net_nix.cpp
+  src/vserv_net_main.cpp
   ${GITTEST_LIB_SOURCES}
 )
 

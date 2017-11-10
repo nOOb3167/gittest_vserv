@@ -77,4 +77,6 @@ int gs_vserv_sockets_create(
 
 int gs_vserv_start(struct GsAuxConfigCommonVars *CommonVars);
 
+int gs_vserv_main_start(struct GsAuxConfigCommonVars &mCommonVars);
+
 #endif /* _VSERV_NET_H_ */

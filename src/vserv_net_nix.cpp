@@ -25,6 +25,8 @@
 #include <gittest/log.h>
 #include <gittest/vserv_net.h>
 
+#define GS_ALLOCA_VAR(VARNAME, TT, NELT) TT *VARNAME = (TT *) alloca(sizeof (TT) * (NELT))
+
 #define GS_VSERV_EPOLL_NUMEVENTS 8
 #define GS_VSERV_SEND_NUMIOVEC 3
 #define GS_VSERV_UDP_SIZE_MAX 65535
@@ -544,6 +546,54 @@ clean:
 	return r;
 }
 
+int gs_vserv_ctl_destroy(struct GsVServCtl *ServCtl)
+{
+	int r = 0;
+
+	// FIXME: incomplete (destroy members)
+
+	if (ServCtl) {
+		GS_DELETE(&ServCtl, struct GsVServCtl);
+	}
+
+clean:
+
+	return r;
+}
+
+int gs_vserv_ctl_quit_request(struct GsVServCtl *ServCtl)
+{
+	int r = 0;
+
+	if (!!(r = gs_eventfd_write(ServCtl->mEvtFdExitReq, 1)))
+		GS_GOTO_CLEAN();
+
+clean:
+
+	return r;
+}
+
+int gs_vserv_ctl_quit_wait(struct GsVServCtl *ServCtl)
+{
+	int r = 0;
+
+	GS_ALLOCA_VAR(RetVal, void *, ServCtl->mThreadNum);
+
+	if (!!(r = gs_eventfd_read(ServCtl->mEvtFdExitReq)))
+		GS_GOTO_CLEAN();
+
+	if (!!(r = gs_eventfd_write(ServCtl->mEvtFdExit, ServCtl->mNumThread)))
+		GS_GOTO_CLEAN();
+
+	for (size_t i = 0; i < ServCtl->mThreadNum; i++)
+		if (!!(r = pthread_join(ServCtl->mThreadVec[i], RetVal + i)))
+			GS_GOTO_CLEAN();
+
+clean:
+
+	return r;
+}
+
 int gs_vserv_write_create(
 	struct GsVServWrite **oWrite)
 {
@@ -730,7 +780,7 @@ int gs_vserv_sockets_create(
 			GS_ERR_CLEAN(1);
 		if (-1 == setsockopt(ioSockFdVec[i], SOL_SOCKET, SO_REUSEPORT, &OptReuseport, sizeof OptReuseport))
 			GS_ERR_CLEAN(1);
-		if (-1 == bind(TmpFd, Rp->ai_addr, Rp->ai_addrlen))
+		if (-1 == bind(ioSockFdVec[i], Rp->ai_addr, Rp->ai_addrlen))
 			GS_ERR_CLEAN(1);
 	}
 
@@ -793,7 +843,7 @@ int gs_vserv_start(struct GsAuxConfigCommonVars *CommonVars)
 
 	ServFd.resize(1, -1);
 
-	if (!!(r = gs_vserv_sockets_create(std::to_string(CommonVars->ServPort).c_str(), ServFd.data(), ServFd.size())))
+	if (!!(r = gs_vserv_sockets_create(std::to_string(CommonVars->VServPort).c_str(), ServFd.data(), ServFd.size())))
 		GS_GOTO_CLEAN();
 
 	if (!!(r = gs_vserv_start_2(ServFd.data(), ServFd.size(), &Cb1->base, &ServCtl)))
@@ -809,32 +859,4 @@ clean:
 		gs_close_cond(&ServFd[i]);
 
 	return r;
-}
-
-int stuff(int argc, char **argv)
-{
-	int r = 0;
-
-	int ListenFd = -1;
-
-	if (!!(r = gs_vserv_sockets_create("3757", &ListenFd, 1)))
-		GS_GOTO_CLEAN();
-
-clean:
-
-	return r;
-}
-
-int main(int argc, char **argv)
-{
-	int r = 0;
-
-	if (!!(r = stuff(argc, argv)))
-		goto clean;
-
-clean:
-	if (!!r)
-		assert(0);
-
-	return EXIT_SUCCESS;
 }
