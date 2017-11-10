@@ -27,6 +27,7 @@ enum GsSockType
 {
 	GS_SOCK_TYPE_NORMAL = 2,
 	GS_SOCK_TYPE_EVENT = 3,
+	GS_SOCK_TYPE_WAKE = 4,
 };
 
 struct GsPacket
@@ -98,178 +99,52 @@ int gs_vserv_write_elt_del_free(char **DataBuf)
 	return 0;
 }
 
-/** oCallAgain and oHaveEAGAIN mutually exclusive
-    (ex once EAGAIN occurs, no way calling this function again would write more data)
-
-    oCallAgain indicates calling this function again may result in more data being written
-	oHaveEAGAIN indicates syscall EAGAIN occurred attempting to write
-
+/** 
 	for epoll(2) EPOLLET edge-triggered mode specifically, writing until EAGAIN is important
 	  as no further EPOLLOUT (writability) events will be received otherwise (socket remains writable)
 */
-int gs_vserv_write_drain_to(struct GsVServWrite *Write, int Fd, int *oCallAgain, int *oHaveEAGAIN)
+int gs_vserv_write_drain_to(struct GsVServCtl *ServCtl, size_t SockIdx, int *oHaveEAGAIN)
 {
 	int r = 0;
 
-	int CallAgain = 0;
-	int HaveLock = 0;
+	struct GsVServWrite *Write = ServCtl->mWriteVec[SockIdx];
+	int Fd = ServCtl->mSockFdVec[SockIdx];
+
 	int HaveEAGAIN = 0;
-	gs_inflight_map_t::iterator it;
 
-	if (!!(r = pthread_mutex_lock(&Write->mMutex)))
-		GS_GOTO_CLEAN();
-	HaveLock = 1;
-
-	/* nothing to write and no EAGAIN */
+	std::deque<GsVServWriteEntry>::iterator it;
 
 	if (Write->mQueue.empty())
 		GS_ERR_NO_CLEAN(0);
 
-	/* otherwise - proceed attemping to write the first Queue Entry */
-
-	it = Write->mQueue.front();
-	Write->mQueue.pop_front();
-
-	struct GsVServWriteEntry &Entry = it->second;
-
-	while (! HaveEAGAIN && ! Entry.mElt.empty()) {
-		/* writes are coalesced via sendmsg call */
-		struct iovec IoVec[GS_VSERV_SEND_NUMIOVEC] = {};
-		const size_t NumIoVec = GS_MIN(Entry.mElt.size(), GS_VSERV_SEND_NUMIOVEC);
-		struct msghdr Hdr = {};
+	for (it = Write->mQueue.begin(); it != Write->mQueue.end(); ++it) {
 		ssize_t NSent = 0;
-		/* queries multiple Elts but does not pop any here - see below for post-write adjustment */
-		for (size_t i = 0; i < NumIoVec; i++) {
-			struct GsVServWriteElt &Elt = Entry.mElt[i];
-			IoVec[i].iov_base = Elt.mData.get();
-			IoVec[i].iov_len = Elt.mLenData;
-		}
-		Hdr.msg_name = Entry.mAddr;
-		Hdr.msg_namelen = sizeof Entry.mAddr;
-		Hdr.msg_iov = IoVec;
-		Hdr.msg_iovlen = NumIoVec;
-		Hdr.msg_control = NULL;
-		Hdr.msg_controllen = 0;
-		Hdr.flags = 0;
-		while (0 > (NSent = sendmsg(Fd, &Hdr, MSG_NOSIGNAL))) {
+		while (-1 == (NSent = sendto(Fd, it->mElt.mData, it->mElt.mLenData, MSG_NOSIGNAL, &it->mAddr.mAddr, sizeof it->mAddr.mAddr))) {
 			if (errno == EINTR)
 				continue;
 			if (errno == EAGAIN || errno == EWOULDBLOCK) {
 				HaveEAGAIN = 1;
-				goto endofwhilebody;
+				goto donewriting;
 			}
 			GS_ERR_CLEAN(1);
 		}
-		/* post-write adjustment - Elts popped wrt amount of data successfully written */
-		GS_ASSERT(NSent >= 0);
-		while (NSent > 0) {
-			GS_ASSERT(! Entry.mElt.empty() && Entry.mElt.front().mLenData <= NSent);
-			NSent -= Entry.mElt.front().mLenData;
-			Entry.mElt.pop_front();
-		}
-	endofwhilebody:
 	}
-
-	if (Entry.mElt.empty()) {
-		/* if succeeded sending all Elts, remove Entry */
-		Write->mAddrInFlight.erase(it);
-	}
-	else {
-		/* if failed to send all Elts (ex EAGAIN), requeue Entry */
-		Write->mQueue.push_back(it);
-	}
-
-	/* if socket hasnt been filled up to the point of causing EAGAIN, we can send more data if any is available
-	   data availability indicated by queue non-emptiness */
-
-	if (! HaveEAGAIN && ! Write->mQueue.empty())
-		CallAgain = 1;
+donewriting:
+	Write->mQueue.erase(Write->mQueue.begin(), it);
 
 noclean:
-	if (oCallAgain)
-		*oCallAgain = CallAgain;
-
 	if (oHaveEAGAIN)
 		*oHaveEAGAIN = HaveEAGAIN;
 
 clean:
-	if (HaveLock)
-		if (!! pthread_mutex_unlock(&Write->mMutex))
-			GS_ASSERT(0);
 
 	return r;
 }
 
-int gs_vserv_write_drain_pre(struct GsVServCtl *ServCtl, size_t ThreadIdx)
-{
-	int r = 0;
-
-	struct GsVServWritePre *WritePre = ServCtl->mWritePreVec[ThreadIdx];
-	struct GsVServWrite *Write = ServCtl->mWriteVec[ThreadIdx];
-
-	int HaveLock = 0;
-	size_t EntryVecLen = 0;
-	struct GsVServWritePreEntry *EntryVec = NULL;
-	size_t Cnt = 0;
-
-	/* first copy WritePre to a temporary area first for shorter lock hold */
-
-	if (!!(r = pthread_mutex_lock(& WritePre->mMutex)))
-		GS_GOTO_CLEAN();
-	HaveLock = 1;
-
-	// FIXME: maybe maintain a lockless emptiness bit in WritePre, allowing lock skip on empty queue
-
-	EntryVecLen = WritePre->mQueue.size();
-	EntryVec = (struct GsVServWritePreEntry *) alloca(sizeof(GsVServWritePreEntry) * EntryVecLen);
-
-	for (auto it = WritePre->mQueue.begin(); it != WritePre->mQueue.end(); ++it, ++Cnt)
-		new (EntryVec + Cnt) GsVServWritePreEntry(*it);  // FIXME: placement new considered harmful
-	WritePre->mQueue.clear();
-
-	if (!! pthread_mutex_lock(& WritePre->mMutex))
-		GS_ASSERT(0);
-	HaveLock = 0;
-
-	/* second transfer WritePre into Write */
-
-	/* there are two parts to Write: AddrInFlight and Queue
-	     AddrInFlight records Elts keyed per Addr
-		 Queue essentially puts a traversal order on AddrInFlight */
-	/* AddrInFligh entry may need to be created, or is just appended-to */
-
-	for (size_t i = 0; i < EntryVecLen; i++) {
-		/* ensure Addr is or becomes handled by 'Write' (presence of map entry) */
-		gs_inflight_map_t::iterator it = Write->mAddrInFlight.find(EntryVec[i].mAddr);
-		if (it == Write->mAddrInFlight.end()) {
-			struct GsVServWriteEntry Entry;
-			Entry.mQueuedAlready = false;
-			Entry.mAddr = EntryVec[i].mAddr;
-			Entry.mElt;
-			auto itb = Write->mAddrInFlight.insert(std::make_pair(Entry.mAddr, std::move(Entry)));
-			GS_ASSERT(itb.second);
-			it = itb.first;
-		}
-		/* queue the data */
-		it->second.mElt.push_back(std::move(EntryVec[i].mElt));
-		/* ensure Addr (map entry) is in the ready list / queue */
-		if (! it->second.mQueuedAlready) {
-			Write->mQueue.push_back(it);
-			it->second.mQueuedAlready = true;
-		}
-	}
-
-clean:
-	if (EntryVec)
-		for (size_t i = 0; i < EntryVecLen; i++)
-			EntryVec[i].~GsVServWritePreEntry();  // FIXME: explicit destructor call due placement new
-	if (HaveLock)
-		if (!! pthread_mutex_unlock(& WritePre->mMutex))
-			GS_ASSERT(0);
-
-	return r;
-}
-
+/** WARNING: this function is affected by caller CPU
+      the designed flow is: x-th receiver calls crank with 'Respond',
+	  crank on x-th receiver calls ex gs_vserv_respond_enqueue.
+	  maybe should just acquire mutexes */
 int gs_vserv_respond_enqueue(
 	struct GsVServRespond *Respond,
 	gs_data_deleter_t DataDeleter,
@@ -281,46 +156,41 @@ int gs_vserv_respond_enqueue(
 	int r = 0;
 
 	struct GsVServCtl *ServCtl = Respond->mServCtl;
+	struct GsVServWrite *Write = ServCtl->mWriteVec[Respond->mSockIdx];
+	int Fd = ServCtl->mSockFdVec[Respond->mSockIdx];
 
-	size_t *HashVec = (size_t *) alloca(sizeof (size_t) * LenEntryVecs);
+	size_t NumWrite = 0;
 
-	/* LockIdxToTake[i] values: 0 - ignore lock; 1 - want lock; 2 - taken lock */
-	char *LockIdxToTake = (char *) alloca(ServCtl->mThreadNum);
+	/* feature may send some messages immediately */
 
-	memset(LockIdxToTake, '\0', ServCtl->mThreadNum);
-
-	for (size_t i = 0; i < LenEntryVecs; i++) {
-		HashVec[i] = gs_addr_rawhash(EntryAddrVec + i);
-		LockIdxToTake[GS_ADDR_RAWHASH_BUCKET(HashVec[i], ServCtl->mThreadNum)] = 1;
-	}
-
-	/* note iterating sequence [0,ThreadNum) determines lock order (by ascending thread idx) */
-	/* currently all locks are obtained at once but could be refactored for one-by-one */
-
-	for (size_t i = 0; i < ServCtl->mThreadNum; i++) {
-		if (LockIdxToTake[i] == 1) {
-			if (!!(r = pthread_mutex_lock(& ServCtl->mWritePreVec[i]->mMutex)))
-				GS_GOTO_CLEAN();
-			LockIdxToTake[i] = 2;
+	if (Write->mTryAtOnce) {
+		for (size_t NumWrite = 0; NumWrite < LenEntryVecs; NumWrite++) {
+			ssize_t NSent = 0;
+			while (-1 == (NSent = sendto(Fd, EntryDataVec[NumWrite], EntryLenDataVec, MSG_NOSIGNAL, &EntryAddrVec[NumWrite].mAddr, sizeof EntryAddrVec[NumWrite].mAddr))) {
+				if (errno == EINTR)
+					continue;
+				if (errno == EAGAIN || errno == EWOULDBLOCK)
+					goto donewriting;
+				GS_ERR_CLEAN(1);
+			}
+			if (!! DataDeleter(&EntryDataVec[NumWrite]))
+				GS_ASSERT(0);
 		}
+	donewriting:
 	}
 
-	for (size_t i = 0; i < LenEntryVecs; i++) {
-		struct GsVServWritePreEntry Entry;
+	/* queue any not yet sent */
+
+	for (size_t i = NumWrite; i < LenEntryVecs; i++) {
+		struct GsVServWriteEntry Entry;
 		Entry.mAddr = EntryAddrVec[i];
 		Entry.mElt.mLenData = EntryLenDataVec[i];
-		Entry.mElt.mData = std::shared_ptr<struct GsVServWriteElt>(EntryDataVec[i], DataDeleter);
+		Entry.mElt.mData = std::move(std::shared_ptr<char>(EntryDataVec[i], DataDeleter));
 		EntryDataVec[i] = NULL;
-		ServCtl->mWritePreVec[HashVec[i]]->mQueue.push_back(std::move(Entry));
+		Write->mQueue.push_back(std::move(Entry));
 	}
 
 clean:
-	for (size_t i = 0; i < ServCtl->mThreadNum; i++) {
-		if (LockIdxToTake[i] == 2) {
-			if (!! pthread_mutex_unlock(& ServCtl->mWritePreVec[i]->mMutex))
-				GS_ASSERT(0);
-		}
-	}
 
 	return r;
 }

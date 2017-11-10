@@ -38,8 +38,8 @@ struct GsVServCtl
 	pthread_t *mThreadVec; size_t mThreadNum;
 	int *mSockFdVec; size_t mSockFdNum;
 	int *mEPollFdVec; size_t mEPollFdNum;
-	struct GsVServWritePre **mWritePreVec; size_t mWritePreNum;
 	struct GsVServWrite **mWriteVec; size_t mWriteNum;
+	int *mWakeAsyncVec; size_t mWakeAsyncNum;
 	int mEvtFdExitReq;
 	int mEvtFdExit;
 	struct GsVServCtlCb *mCb;
@@ -58,9 +58,8 @@ struct GsVServWriteElt
 
 struct GsVServWriteEntry
 {
-	bool mQueuedAlready;
 	struct GsAddr mAddr;
-	std::deque<GsVServWriteElt> mElt;
+	struct GsVServWriteElt mElt;
 };
 
 /** @sa
@@ -69,20 +68,7 @@ struct GsVServWriteEntry
 struct GsVServWrite
 {
 	bool mTryAtOnce;
-	gs_inflight_map_t mAddrInFlight;
-	std::deque<gs_inflight_map_t::iterator> mQueue;
-};
-
-struct GsVServWritePreEntry
-{
-	struct GsAddr mAddr;
-	struct GsVServWriteElt mElt;
-};
-
-struct GsVServWritePre
-{
-	std::deque<GsVServWritePreEntry> mQueue;
-	pthread_mutex_t mMutex;
+	std::deque<GsVServWriteEntry> mQueue;
 };
 
 struct GsAddr
@@ -116,6 +102,9 @@ static int gs_vserv_receive_evt_normal(
 	struct GsEPollCtx *EPollCtx,
 	char *UdpBuf, size_t LenUdp);
 static int gs_vserv_receive_evt_event(
+	struct GsVServCtl *ServCtl,
+	struct GsEPollCtx *EPollCtx);
+static int gs_vserv_receive_writable(
 	struct GsVServCtl *ServCtl,
 	struct GsEPollCtx *EPollCtx);
 static int gs_vserv_receive_func(
@@ -238,11 +227,29 @@ int gs_vserv_receive_evt_event(
 	int r = 0;
 
 	const int Fd = ServCtl->mSockFdVec[GS_MAX(EPollCtx->mSockIdx, ServCtl->mSockFdNum)];
-	bool DoneReading = 0;
 
 	GS_ASSERT(Fd == EPollCtx->mFd);
 
 	if (!!(r = gs_eventfd_read(Fd)))
+		GS_GOTO_CLEAN();
+
+clean:
+
+	return r;
+}
+
+int gs_vserv_receive_writable(
+	struct GsVServCtl *ServCtl,
+	struct GsEPollCtx *EPollCtx)
+{
+	int r = 0;
+
+	const int Fd = ServCtl->mSockFdVec[GS_MAX(EPollCtx->mSockIdx, ServCtl->mSockFdNum)];
+	struct GsVServWrite *Write = ServCtl->mWriteVec[EPollCtx->mSockIdx];
+
+	GS_ASSERT(Fd == EPollCtx->mFd);
+
+	if (!!(r = gs_vserv_write_drain_to(ServCtl, EPollCtx->mSockIdx, NULL)))
 		GS_GOTO_CLEAN();
 
 clean:
@@ -266,6 +273,11 @@ int gs_vserv_receive_func(
 		struct epoll_event Events[GS_VSERV_EPOLL_NUMEVENTS] = {};
 		int NReady = 0;
 
+		/* https://lkml.org/lkml/2011/11/17/234
+		     epoll_wait completing on fd registered with MASK
+			 (epoll_ctl(fd,MASK) where MASK is EPOLLIN|EPOLLOUT for example)
+			 will deliver event with full MASK set. consider adding twice with separate mask. */
+
 		while (-1 == (NReady = epoll_wait(EPollFd, Events, GS_VSERV_EPOLL_NUMEVENTS, 100))) {
 			if (errno == EINTR)
 				continue;
@@ -287,6 +299,8 @@ int gs_vserv_receive_func(
 				{
 					if (!!(r = gs_vserv_receive_evt_normal(EPollCtx->mServCtl, EPollCtx, UdpBuf, LenUdp)))
 						GS_GOTO_CLEAN();
+					if (!!(r = gs_vserv_receive_writable(EPollCtx->mServCtl, EPollCtx)))
+						GS_GOTO_CLEAN();
 				}
 				break;
 
@@ -298,10 +312,21 @@ int gs_vserv_receive_func(
 				}
 				break;
 
+				case GS_SOCK_TYPE_WAKE:
+				{
+					// FIXME: not implemented yet
+					GS_ASSERT(0);
+				}
+				break;
+
 				default:
 					GS_ASSERT(0);
 
 				}
+			}
+			if (Events[i].events & EPOLLOUT) {
+				if (!!(r = gs_vserv_receive_writable(EPollCtx->mServCtl, EPollCtx)))
+					GS_GOTO_CLEAN();
 			}
 		}
 	}
@@ -346,7 +371,7 @@ int gs_vserv_epollctx_add_for(
 
 	struct GsEPollCtx **EvtDataPtr = (struct GsEPollCtx **) &Evt.data.ptr;
 
-	Evt.events = EPOLLIN | EPOLLET;    /* NOTE: no EPOLLONESHOT this time */
+	Evt.events = EPOLLIN | EPOLLOUT | EPOLLET;    /* NOTE: no EPOLLONESHOT this time */
 	/* remainder effectively setting up Evt.data.ptr */
 	(*EvtDataPtr) = new GsEPollCtx();
 	(*EvtDataPtr)->mType = Type;
@@ -385,7 +410,11 @@ int gs_vserv_ctl_create_part(
 	ServCtl->mEPollFdVec = new int[ThreadNum];
 	for (size_t i = 0; i < ThreadNum; i++)
 		ServCtl->mEPollFdVec[i] = -1;
-	if (! ServCtl->mThreadVec || ! ServCtl->mSockFdVec || ! ServCtl->mEPollFdVec)
+	ServCtl->mWakeAsyncNum = ThreadNum;
+	ServCtl->mWakeAsyncVec = new int[ThreadNum];
+	for (size_t i = 0; i < ThreadNum; i++)
+		ServCtl->mWakeAsyncVec[i] = -1;
+	if (! ServCtl->mThreadVec || ! ServCtl->mSockFdVec || ! ServCtl->mEPollFdVec || ! ServCtl->mWakeAsyncVec)
 		GS_ERR_CLEAN(1);
 
 	// thread requesting exit 0 -> 1 -> 0
@@ -395,19 +424,28 @@ int gs_vserv_ctl_create_part(
 	if (-1 == (ServCtl->mEvtFdExit = eventfd(0, EFD_CLOEXEC | EFD_SEMAPHORE)))
 		GS_ERR_CLEAN(1);
 
+	/* meant to interrupt a sleeping worker (inside ex epoll_wait) */
+
+	for (size_t i = 0; i < ThreadNum; i++) {
+		if (-1 == (ServCtl->mWakeAsyncVec[i] = eventfd(0, EFD_CLOEXEC | EFD_SEMAPHORE)))
+			GS_ERR_CLEAN(1);
+	}
+
 	/* create epoll sets */
 
 	for (size_t i = 0; i < ThreadNum; i++)
 		if (-1 == (ServCtl->mEPollFdVec[i] = epoll_create1(EPOLL_CLOEXEC)))
 			GS_ERR_CLEAN(1);
 
-	/* add socks and exit events to epoll sets */
+	/* add socks, exit, wake events to epoll sets */
 
 	for (size_t i = 0; i < ThreadNum; i++) {
 		if (!!(r = gs_vserv_epollctx_add_for(ServCtl->mEPollFdVec[i], i, ServCtl->mEvtFdExit, GS_SOCK_TYPE_EVENT, ServCtl)))
 			GS_GOTO_CLEAN();
 		GS_ASSERT(ThreadNum == SockFdNum);
 		if (!!(r = gs_vserv_epollctx_add_for(ServCtl->mEPollFdVec[i], i, ServCtl->mSockFdVec[i], GS_SOCK_TYPE_NORMAL, ServCtl)))
+			GS_GOTO_CLEAN();
+		if (!!(r = gs_vserv_epollctx_add_for(ServCtl->mEPollFdVec[i], i, ServCtl->mWakeAsyncVec[i], GS_SOCK_TYPE_WAKE, ServCtl)))
 			GS_GOTO_CLEAN();
 	}
 
@@ -432,6 +470,10 @@ clean:
 		for (size_t i = 0; i < ServCtl->mEPollFdNum; i++)
 			gs_close_cond(ServCtl->mEPollFdVec + i);
 		GS_DELETE_ARRAY(&ServCtl->mEPollFdVec, int);
+
+		for (size_t i = 0; i < ServCtl->mWakeAsyncNum; i++)
+			gs_close_cond(ServCtl->mWakeAsyncVec + i);
+		GS_DELETE_ARRAY(&ServCtl->mWakeAsyncVec, int);
 
 		GS_DELETE(&ServCtl, struct GsVServCtl);
 
