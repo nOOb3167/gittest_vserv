@@ -196,7 +196,7 @@ int gs_vserv_receive_evt_normal(
 {
 	int r = 0;
 
-	const int Fd = ServCtl->mSockFdVec[GS_MAX(EPollCtx->mSockIdx, ServCtl->mSockFdNum)];
+	const int Fd = ServCtl->mSockFdVec[GS_MIN(EPollCtx->mSockIdx, ServCtl->mSockFdNum - 1)];
 	bool DoneReading = 0;
 
 	GS_ASSERT(Fd == EPollCtx->mFd);
@@ -245,7 +245,7 @@ int gs_vserv_receive_evt_event(
 {
 	int r = 0;
 
-	const int Fd = ServCtl->mSockFdVec[GS_MAX(EPollCtx->mSockIdx, ServCtl->mSockFdNum)];
+	const int Fd = ServCtl->mSockFdVec[GS_MIN(EPollCtx->mSockIdx, ServCtl->mSockFdNum - 1)];
 
 	GS_ASSERT(Fd == EPollCtx->mFd);
 
@@ -263,7 +263,7 @@ int gs_vserv_receive_writable(
 {
 	int r = 0;
 
-	const int Fd = ServCtl->mSockFdVec[GS_MAX(EPollCtx->mSockIdx, ServCtl->mSockFdNum)];
+	const int Fd = ServCtl->mSockFdVec[GS_MIN(EPollCtx->mSockIdx, ServCtl->mSockFdNum - 1)];
 	struct GsVServWrite *Write = ServCtl->mWriteVec[EPollCtx->mSockIdx];
 
 	GS_ASSERT(Fd == EPollCtx->mFd);
@@ -348,8 +348,17 @@ int gs_vserv_receive_func(
 				}
 			}
 			if (Events[i].events & EPOLLOUT) {
-				if (!!(r = gs_vserv_receive_writable(EPollCtx->mServCtl, EPollCtx)))
-					GS_GOTO_CLEAN();
+				switch (EPollCtx->mType)
+				{
+
+				case GS_SOCK_TYPE_NORMAL:
+				{
+					if (!!(r = gs_vserv_receive_writable(EPollCtx->mServCtl, EPollCtx)))
+						GS_GOTO_CLEAN();
+				}
+				break;
+
+				}
 			}
 		}
 	}
@@ -398,7 +407,10 @@ int gs_vserv_epollctx_add_for(
 
 	struct GsEPollCtx **EvtDataPtr = (struct GsEPollCtx **) &Evt.data.ptr;
 
-	Evt.events = EPOLLIN | EPOLLOUT | EPOLLET;    /* NOTE: no EPOLLONESHOT this time */
+	if (Type == GS_SOCK_TYPE_NORMAL)
+		Evt.events = EPOLLOUT | EPOLLIN | EPOLLET;    /* NOTE: no EPOLLONESHOT this time */
+	else
+		Evt.events = EPOLLIN | EPOLLET;
 	/* remainder effectively setting up Evt.data.ptr */
 	(*EvtDataPtr) = new GsEPollCtx();
 	(*EvtDataPtr)->mType = Type;
@@ -429,6 +441,7 @@ int gs_vserv_ctl_create_part(
 	struct GsVServCtl *ServCtl = new GsVServCtl();
 
 	*ServCtl = {};
+	ServCtl->mNumThread = ThreadNum;
 	ServCtl->mThreadNum = ThreadNum;
 	ServCtl->mThreadVec = new pthread_t[ThreadNum];
 	ServCtl->mSockFdNum = ThreadNum;
@@ -445,6 +458,12 @@ int gs_vserv_ctl_create_part(
 		ServCtl->mWakeAsyncVec[i] = -1;
 	if (! ServCtl->mThreadVec || ! ServCtl->mSockFdVec || ! ServCtl->mEPollFdVec || ! ServCtl->mWakeAsyncVec)
 		GS_ERR_CLEAN(1);
+
+	ServCtl->mWriteNum = ThreadNum;
+	ServCtl->mWriteVec = new GsVServWrite *[ThreadNum];
+	for (size_t i = 0; i < ThreadNum; i++)
+		if (!!(r = gs_vserv_write_create(&ServCtl->mWriteVec[i])))
+			GS_GOTO_CLEAN();
 
 	// thread requesting exit 0 -> 1 -> 0
 	if (-1 == (ServCtl->mEvtFdExitReq = eventfd(0, EFD_CLOEXEC | EFD_SEMAPHORE)))
@@ -469,12 +488,12 @@ int gs_vserv_ctl_create_part(
 	/* add socks, exit, wake events to epoll sets */
 
 	for (size_t i = 0; i < ThreadNum; i++) {
-		if (!!(r = gs_vserv_epollctx_add_for(ServCtl->mEPollFdVec[i], i, ServCtl->mEvtFdExit, GS_SOCK_TYPE_EVENT, ServCtl)))
+		if (!!(r = gs_vserv_epollctx_add_for(ServCtl->mEPollFdVec[i], -1, ServCtl->mEvtFdExit, GS_SOCK_TYPE_EVENT, ServCtl)))
 			GS_GOTO_CLEAN();
 		GS_ASSERT(ThreadNum == SockFdNum);
 		if (!!(r = gs_vserv_epollctx_add_for(ServCtl->mEPollFdVec[i], i, ServCtl->mSockFdVec[i], GS_SOCK_TYPE_NORMAL, ServCtl)))
 			GS_GOTO_CLEAN();
-		if (!!(r = gs_vserv_epollctx_add_for(ServCtl->mEPollFdVec[i], i, ServCtl->mWakeAsyncVec[i], GS_SOCK_TYPE_WAKE, ServCtl)))
+		if (!!(r = gs_vserv_epollctx_add_for(ServCtl->mEPollFdVec[i], -1, ServCtl->mWakeAsyncVec[i], GS_SOCK_TYPE_WAKE, ServCtl)))
 			GS_GOTO_CLEAN();
 	}
 
@@ -503,6 +522,10 @@ clean:
 		for (size_t i = 0; i < ServCtl->mWakeAsyncNum; i++)
 			gs_close_cond(ServCtl->mWakeAsyncVec + i);
 		GS_DELETE_ARRAY(&ServCtl->mWakeAsyncVec, int);
+
+		for (size_t i = 0; i < ServCtl->mWriteNum; i++)
+			GS_DELETE_F(&ServCtl->mWriteVec[i], gs_vserv_write_destroy);
+		GS_DELETE_ARRAY(&ServCtl->mWriteVec, struct GsVServWrite *);
 
 		GS_DELETE(&ServCtl, struct GsVServCtl);
 
