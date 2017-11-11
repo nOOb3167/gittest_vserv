@@ -1,6 +1,7 @@
 #include <cassert>
 #include <cstdlib>
 #include <cstring>
+#include <cstdint>
 
 #include <functional>  // std::hash
 #include <utility>
@@ -9,7 +10,6 @@
 #include <deque>
 #include <map>
 
-#include <alloca.h>
 #include <signal.h>
 #include <unistd.h>
 #include <fcntl.h>
@@ -18,14 +18,13 @@
 #include <sys/socket.h>
 #include <sys/epoll.h>
 #include <sys/eventfd.h>
+#include <arpa/inet.h>
 #include <pthread.h>
 
 #include <gittest/misc.h>
 #include <gittest/filesys.h>
 #include <gittest/log.h>
 #include <gittest/vserv_net.h>
-
-#define GS_ALLOCA_VAR(VARNAME, TT, NELT) TT *VARNAME = (TT *) alloca(sizeof (TT) * (NELT))
 
 #define GS_VSERV_EPOLL_NUMEVENTS 8
 #define GS_VSERV_SEND_NUMIOVEC 3
@@ -131,9 +130,29 @@ bool gs_addr_equal_t::operator()(const GsAddr &a, const GsAddr &b) const {
 		&& a.mAddr.sin_addr.s_addr == b.mAddr.sin_addr.s_addr;
 }
 
+/** needs to be destructible by regular free(2) (ex gs_vserv_write_elt_del_sp_free) */
+int gs_packet_copy_create(struct GsPacket *Packet, uint8_t **oABuf, size_t *oLenA)
+{
+	uint8_t *ABuf = NULL;
+	size_t LenA = Packet->dataLength;
+	if (!(ABuf = (uint8_t *)malloc(LenA)))
+		return 1;
+	memcpy(ABuf, Packet->data, Packet->dataLength);
+	if (oABuf)
+		*oABuf = ABuf;
+	if (oLenA)
+		*oLenA = LenA;
+	return 0;
+}
+
 size_t gs_addr_rawhash(struct GsAddr *Addr)
 {
 	return gs_addr_hash_t()(*Addr);
+}
+
+size_t gs_addr_port(struct GsAddr *Addr)
+{
+	return ntohs(Addr->mAddr.sin_port);
 }
 
 int gs_eventfd_read(int EvtFd)
@@ -635,7 +654,7 @@ int gs_vserv_write_destroy(struct GsVServWrite *Write)
 	return 0;
 }
 
-int gs_vserv_write_elt_del_free(char **DataBuf)
+int gs_vserv_write_elt_del_free(uint8_t **DataBuf)
 {
 	if (*DataBuf) {
 		free(*DataBuf);
@@ -644,7 +663,7 @@ int gs_vserv_write_elt_del_free(char **DataBuf)
 	return 0;
 }
 
-int gs_vserv_write_elt_del_sp_free(char *DataBuf)
+int gs_vserv_write_elt_del_sp_free(uint8_t *DataBuf)
 {
 	free(DataBuf);
 	return 0;
@@ -698,12 +717,9 @@ clean:
 	  maybe should just acquire mutexes */
 int gs_vserv_respond_enqueue(
 	struct GsVServRespond *Respond,
-	gs_data_deleter_t DataDeleter,
 	gs_data_deleter_sp_t DataDeleterSp,
-	char **EntryDataVec, /*owned*/
-	size_t *EntryLenDataVec,
-	struct GsAddr *EntryAddrVec,
-	size_t LenEntryVecs)
+	uint8_t *DataBuf, size_t LenData, /*owned*/
+	const struct GsAddr **AddrVec, size_t LenAddrVec)
 {
 	int r = 0;
 
@@ -716,35 +732,45 @@ int gs_vserv_respond_enqueue(
 	/* feature may send some messages immediately */
 
 	if (Write->mTryAtOnce) {
-		for (size_t NumWrite = 0; NumWrite < LenEntryVecs; NumWrite++) {
+		for (size_t NumWrite = 0; NumWrite < LenAddrVec; NumWrite++) {
 			ssize_t NSent = 0;
-			while (-1 == (NSent = sendto(Fd, EntryDataVec[NumWrite], EntryLenDataVec[NumWrite], MSG_NOSIGNAL, (struct sockaddr *) &EntryAddrVec[NumWrite].mAddr, sizeof EntryAddrVec[NumWrite].mAddr))) {
+			while (-1 == (NSent = sendto(Fd, DataBuf, LenData, MSG_NOSIGNAL, (struct sockaddr *) &AddrVec[NumWrite]->mAddr, sizeof AddrVec[NumWrite]->mAddr))) {
 				if (errno == EINTR)
 					continue;
 				if (errno == EAGAIN || errno == EWOULDBLOCK)
 					goto donewriting;
 				GS_ERR_CLEAN(1);
 			}
-			if (!! DataDeleter(&EntryDataVec[NumWrite]))
-				GS_ASSERT(0);
 		}
 	}
+
 donewriting:
 
 	/* queue any not yet sent */
 
-	for (size_t i = NumWrite; i < LenEntryVecs; i++) {
-		struct GsVServWriteEntry Entry;
-		Entry.mAddr = EntryAddrVec[i];
-		Entry.mElt.mLenData = EntryLenDataVec[i];
-		Entry.mElt.mData = std::move(std::shared_ptr<char>(EntryDataVec[i], DataDeleterSp));
-		EntryDataVec[i] = NULL;
-		Write->mQueue.push_back(std::move(Entry));
+	if (NumWrite < LenAddrVec) {
+		std::shared_ptr<uint8_t> Sp(GS_ARGOWN(&DataBuf), DataDeleterSp);
+		for (size_t i = NumWrite; i < LenAddrVec; i++) {
+			struct GsVServWriteEntry Entry;
+			Entry.mAddr = *AddrVec[i];
+			Entry.mElt.mLenData = LenData;
+			Entry.mElt.mData = Sp;
+			Write->mQueue.push_back(std::move(Entry));
+		}
 	}
 
 clean:
+	GS_DELETE_F(&DataBuf, DataDeleterSp);
 
 	return r;
+}
+
+int gs_vserv_respond_enqueue_free(
+	struct GsVServRespond *Respond,
+	uint8_t *DataBuf, size_t LenData, /*owned*/
+	const struct GsAddr **AddrVec, size_t LenAddrVec)
+{
+	return gs_vserv_respond_enqueue(Respond, gs_vserv_write_elt_del_sp_free, DataBuf, LenData, AddrVec, LenAddrVec);
 }
 
 int gs_vserv_sockets_create(

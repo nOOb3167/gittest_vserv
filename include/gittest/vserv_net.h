@@ -2,8 +2,18 @@
 #define _VSERV_NET_H_
 
 #include <stddef.h>
+#include <cstdint>
+
+#ifdef _MSC_VER
+#  include <malloc.h>  // alloca
+#else
+#  include <alloca.h>
+#endif
 
 #include <gittest/config.h>
+
+// FIXME: should be declared somewhere else
+#define GS_ALLOCA_VAR(VARNAME, TT, NELT) TT *VARNAME = (TT *) alloca(sizeof (TT) * (NELT))
 
 #define GS_ADDR_RAWHASH_BUCKET(RAWHASH, NUM_BUCKETS) ((RAWHASH) % (NUM_BUCKETS))
 
@@ -21,9 +31,9 @@ struct gs_addr_equal_t { bool operator()(const GsAddr &a, const GsAddr &b) const
 /* receives pointer (Data) to the to-be-deleted data pointer (*Data)
    deletion must be skipped if *Data is NULL
    deletion must cause *Data to become NULL */
-typedef int (*gs_data_deleter_t)(char **Data);
+typedef int (*gs_data_deleter_t)(uint8_t **Data);
 /* single indirection version of gs_data_deleter_t */
-typedef int (*gs_data_deleter_sp_t)(char *Data);
+typedef int (*gs_data_deleter_sp_t)(uint8_t *Data);
 
 enum GsSockType
 {
@@ -43,7 +53,11 @@ struct GsVServCtlCb
 	int(*CbCrank)(struct GsVServCtlCb *Cb, struct GsPacket *Packet, struct GsAddr *Addr, struct GsVServRespond *Respond);
 };
 
+
+int gs_packet_copy_create(struct GsPacket *Packet, uint8_t **oABuf, size_t *oLenA);
+
 size_t gs_addr_rawhash(struct GsAddr *Addr);
+size_t gs_addr_port(struct GsAddr *Addr);
 
 int gs_vserv_ctl_create_part(
 	size_t ThreadNum,
@@ -59,17 +73,18 @@ int gs_vserv_ctl_quit_wait(struct GsVServCtl *ServCtl);
 int gs_vserv_write_create(
 	struct GsVServWrite **oWrite);
 int gs_vserv_write_destroy(struct GsVServWrite *Write);
-int gs_vserv_write_elt_del_free(char **DataBuf);
-int gs_vserv_write_elt_del_sp_free(char *DataBuf);
+int gs_vserv_write_elt_del_free(uint8_t **DataBuf);
+int gs_vserv_write_elt_del_sp_free(uint8_t *DataBuf);
 int gs_vserv_write_drain_to(struct GsVServCtl *ServCtl, size_t SockIdx, int *oHaveEAGAIN);
 int gs_vserv_respond_enqueue(
 	struct GsVServRespond *Respond,
-	gs_data_deleter_t DataDeleter,
 	gs_data_deleter_sp_t DataDeleterSp,
-	char **EntryDataVec, /*owned*/
-	size_t *EntryLenDataVec,
-	struct GsAddr *EntryAddrVec,
-	size_t LenEntryVecs);
+	uint8_t *DataBuf, size_t LenData, /*owned*/
+	const struct GsAddr **AddrVec, size_t LenAddrVec);
+int gs_vserv_respond_enqueue_free(
+	struct GsVServRespond *Respond,
+	uint8_t *DataBuf, size_t LenData, /*owned*/
+	const struct GsAddr **AddrVec, size_t LenAddrVec);
 
 int gs_vserv_sockets_create(
 	const char *Port,
