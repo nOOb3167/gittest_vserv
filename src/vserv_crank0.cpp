@@ -1,3 +1,5 @@
+#include <cstring>
+
 #include <vector>
 
 #include <gittest/misc.h>
@@ -51,7 +53,7 @@ int gs_vserv_start_crank0(struct GsAuxConfigCommonVars *CommonVars)
 	Ext = new GsVServConExt();
 	Ext->mCommonVars = *CommonVars;
 	Cb1 = new GsVServCtlCb1();
-	Cb1->base.CbCrank = NULL;
+	Cb1->base.CbCrank = gs_vserv_crank0;
 	Cb1->Ext = GS_ARGOWN(&Ext);
 
 	ServFd.resize(1, -1);

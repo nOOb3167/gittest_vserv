@@ -203,7 +203,7 @@ int gs_vserv_receive_evt_normal(
 				continue;
 			if (errno == EAGAIN || errno == EWOULDBLOCK) {
 				DoneReading = 1;
-				break;
+				goto donereading;
 			}
 			GS_ERR_CLEAN(1);
 		}
@@ -215,13 +215,14 @@ int gs_vserv_receive_evt_normal(
 			GS_ERR_CLEAN(1);
 		/* dispatch datagram */
 		Packet.data = (uint8_t *)UdpBuf;
-		Packet.dataLength = LenUdp;
+		Packet.dataLength = NRecv;
 		Address.mAddr = Addr;
 		Respond.mServCtl = ServCtl;
 		Respond.mSockIdx = EPollCtx->mSockIdx;
 		if (!!(r = ServCtl->mCb->CbCrank(ServCtl->mCb, &Packet, &Address, &Respond)))
 			GS_GOTO_CLEAN();
 	}
+donereading:
 
 clean:
 

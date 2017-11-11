@@ -7,6 +7,7 @@ SET(GITTEST_PLAT_HEADERS_NIX
 SET(GITTEST_PLAT_SOURCES_NIX
   src/vserv_net_nix.cpp
   src/vserv_net_main.cpp
+  src/vserv_crank0.cpp
   ${GITTEST_COMMON_SOURCES_NIX}
 )
 
