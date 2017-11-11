@@ -9,7 +9,7 @@
 #include <gittest/vserv_net.h>
 
 enum GsVServCmd {
-	GS_VSERV_CMD_BROADCAST = 0,
+	GS_VSERV_CMD_BROADCAST = 'b',
 };
 
 struct GsVServConExt
@@ -55,7 +55,7 @@ int gs_vserv_crank0(struct GsVServCtlCb *Cb, struct GsPacket *Packet, struct GsA
 		uint8_t *PacketCpy = NULL;
 		size_t LenPacketCpy = 0;
 		size_t TmpCnt = 0;
-		GS_ALLOCA_VAR(AddrVec, struct GsAddr *, Ext->mUsers.size());
+		GS_ALLOCA_VAR(AddrVec, const struct GsAddr *, Ext->mUsers.size());
 		if (!!(r = gs_packet_copy_create(Packet, &PacketCpy, &LenPacketCpy)))
 			GS_GOTO_CLEAN_J(broadcast);
 		for (auto it = Ext->mUsers.begin(); it != Ext->mUsers.end(); ++it)

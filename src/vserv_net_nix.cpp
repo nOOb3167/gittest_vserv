@@ -130,7 +130,7 @@ bool gs_addr_equal_t::operator()(const GsAddr &a, const GsAddr &b) const {
 		&& a.mAddr.sin_addr.s_addr == b.mAddr.sin_addr.s_addr;
 }
 
-bool gs_addr_p_less_t::operator()(const GsAddr *&a, const GsAddr *&b) const {
+bool gs_addr_p_less_t::operator()(GsAddr * const &a, GsAddr * const &b) const {
 	return gs_addr_hash_t()(*a) < gs_addr_hash_t()(*b);
 }
 

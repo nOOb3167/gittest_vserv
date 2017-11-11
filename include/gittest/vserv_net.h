@@ -26,7 +26,7 @@ struct GsVServWrite;
 #ifdef __cplusplus
 struct gs_addr_hash_t { size_t operator()(const struct GsAddr &k) const; };
 struct gs_addr_equal_t { bool operator()(const GsAddr &a, const GsAddr &b) const; };
-struct gs_addr_p_less_t { bool operator()(const GsAddr *&a, const GsAddr *&b) const; };
+struct gs_addr_p_less_t { bool operator()(GsAddr * const &a, GsAddr * const &b) const; };
 #endif /* __cplusplus */
 
 /* receives pointer (Data) to the to-be-deleted data pointer (*Data)
