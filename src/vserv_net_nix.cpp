@@ -67,7 +67,7 @@ struct GsVServRespond
 
 struct GsVServWriteElt
 {
-	std::shared_ptr<char> mData; size_t mLenData;
+	std::shared_ptr<uint8_t> mData; size_t mLenData;
 };
 
 struct GsVServWriteEntry
@@ -128,6 +128,10 @@ bool gs_addr_equal_t::operator()(const GsAddr &a, const GsAddr &b) const {
 	return a.mAddr.sin_family == b.mAddr.sin_family
 		&& a.mAddr.sin_port == b.mAddr.sin_port
 		&& a.mAddr.sin_addr.s_addr == b.mAddr.sin_addr.s_addr;
+}
+
+bool gs_addr_p_less_t::operator()(const GsAddr *&a, const GsAddr *&b) const {
+	return gs_addr_hash_t()(*a) < gs_addr_hash_t()(*b);
 }
 
 /** needs to be destructible by regular free(2) (ex gs_vserv_write_elt_del_sp_free) */

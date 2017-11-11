@@ -2,7 +2,7 @@
 #include <cstdint>
 
 #include <vector>
-#include <unordered_set>
+#include <set>
 
 #include <gittest/misc.h>
 #include <gittest/filesys.h>
@@ -15,7 +15,7 @@ enum GsVServCmd {
 struct GsVServConExt
 {
 	struct GsAuxConfigCommonVars mCommonVars; /*notowned*/
-	std::unordered_set<GsAddr *, gs_addr_hash_t, gs_addr_equal_t> mUsers;
+	std::set<GsAddr *, gs_addr_p_less_t> mUsers;
 };
 
 struct GsVServCtlCb0
