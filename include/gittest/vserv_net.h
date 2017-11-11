@@ -60,7 +60,7 @@ int gs_vserv_write_create(
 	struct GsVServWrite **oWrite);
 int gs_vserv_write_destroy(struct GsVServWrite *Write);
 int gs_vserv_write_elt_del_free(char **DataBuf);
-int gs_vserv_write_elt_del_sp_func(char *DataBuf);
+int gs_vserv_write_elt_del_sp_free(char *DataBuf);
 int gs_vserv_write_drain_to(struct GsVServCtl *ServCtl, size_t SockIdx, int *oHaveEAGAIN);
 int gs_vserv_respond_enqueue(
 	struct GsVServRespond *Respond,
@@ -75,8 +75,13 @@ int gs_vserv_sockets_create(
 	const char *Port,
 	int *ioSockFdVec, size_t SockFdNum);
 
-int gs_vserv_start(struct GsAuxConfigCommonVars *CommonVars);
+int gs_vserv_start_2(
+	int *ServFdVec, size_t ServFdNum, /*owned/stealing*/
+	struct GsVServCtlCb *Cb,
+	struct GsVServCtl **oServCtl);
 
-int gs_vserv_main_start(struct GsAuxConfigCommonVars &mCommonVars);
+/**/
+
+int gs_vserv_start_crank0(struct GsAuxConfigCommonVars *CommonVars);
 
 #endif /* _VSERV_NET_H_ */

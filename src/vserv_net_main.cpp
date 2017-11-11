@@ -33,7 +33,7 @@ int main(int argc, char **argv)
   {
     log_guard_t Log(GS_LOG_GET("serv"));
 
-    if (!!(r = gs_vserv_start(&CommonVars)))
+    if (!!(r = gs_vserv_start_crank0(&CommonVars)))
       GS_GOTO_CLEAN();
     }
 

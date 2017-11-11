@@ -94,17 +94,6 @@ struct GsEPollCtx
 	size_t mFd; /*notowned - informative*/
 };
 
-struct GsVServConExt
-{
-	struct GsAuxConfigCommonVars mCommonVars; /*notowned*/
-};
-
-struct GsVServCtlCb1
-{
-	struct GsVServCtlCb base;
-	struct GsVServConExt *Ext; /*owned*/
-};
-
 static int gs_eventfd_read(int EvtFd);
 static int gs_eventfd_write(int EvtFd, int Value);
 static int gs_vserv_receive_evt_normal(
@@ -654,7 +643,7 @@ int gs_vserv_write_elt_del_free(char **DataBuf)
 	return 0;
 }
 
-int gs_vserv_write_elt_del_sp_func(char *DataBuf)
+int gs_vserv_write_elt_del_sp_free(char *DataBuf)
 {
 	free(DataBuf);
 	return 0;
@@ -845,41 +834,6 @@ clean:
 
 	for (size_t i = 0; i < ServFdNum; i++)
 		gs_close_cond(ServFdVec + i);
-
-	return r;
-}
-
-int gs_vserv_start(struct GsAuxConfigCommonVars *CommonVars)
-{
-	int r = 0;
-
-	std::vector<int> ServFd;
-	struct GsVServConExt *Ext = NULL;
-	struct GsVServCtlCb1 *Cb1 = NULL;
-	struct GsVServCtl *ServCtl = NULL;
-
-	Ext = new GsVServConExt();
-	Ext->mCommonVars = *CommonVars;
-	Cb1 = new GsVServCtlCb1();
-	Cb1->base.CbCrank = NULL;
-	Cb1->Ext = GS_ARGOWN(&Ext);
-
-	ServFd.resize(1, -1);
-
-	if (!!(r = gs_vserv_sockets_create(std::to_string(CommonVars->VServPort).c_str(), ServFd.data(), ServFd.size())))
-		GS_GOTO_CLEAN();
-
-	if (!!(r = gs_vserv_start_2(ServFd.data(), ServFd.size(), &Cb1->base, &ServCtl)))
-		GS_GOTO_CLEAN();
-
-	if (!!(r = gs_vserv_ctl_quit_wait(ServCtl)))
-		GS_GOTO_CLEAN();
-
-clean:
-	GS_DELETE(&Ext, struct GsVServConExt);
-	GS_DELETE_F(&ServCtl, gs_vserv_ctl_destroy);
-	for (size_t i = 0; i < ServFd.size(); i++)
-		gs_close_cond(&ServFd[i]);
 
 	return r;
 }
