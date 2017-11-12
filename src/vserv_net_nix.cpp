@@ -30,14 +30,11 @@
 #define GS_VSERV_SEND_NUMIOVEC 3
 #define GS_VSERV_UDP_SIZE_MAX 65535
 
-struct GsAddr;
-struct GsVServWriteEntry;
-// FIXME: unordered_map may be possible https://stackoverflow.com/questions/16781886/can-we-store-unordered-maptiterator/16782536#16782536
-typedef std::map<struct GsAddr, struct GsVServWriteEntry> gs_inflight_map_t;
-
 struct GsAddr
 {
-	struct sockaddr_in mAddr;
+	unsigned long long mSinFamily; /*AF_UNIX*/
+	unsigned long long mSinPort; /*host byte order*/
+	unsigned long long mSinAddr; /*host byte order*/
 };
 
 struct GsVServCtl
@@ -93,6 +90,7 @@ struct GsEPollCtx
 	size_t mFd; /*notowned - informative*/
 };
 
+static int gs_addr_sockaddr_in(const struct GsAddr *Addr, struct sockaddr_in *SockAddr);
 static int gs_eventfd_read(int EvtFd);
 static int gs_eventfd_write(int EvtFd, int Value);
 static int gs_vserv_receive_evt_normal(
@@ -119,15 +117,15 @@ static int gs_vserv_epollctx_add_for(
 
 size_t gs_addr_hash_t::operator()(const struct GsAddr &k) const {
 	// FIXME: https://stackoverflow.com/questions/35985960/c-why-is-boosthash-combine-the-best-way-to-combine-hash-values
-	return (    (std::hash<unsigned long long>()(k.mAddr.sin_family) << 1)
-		     ^ ((std::hash<unsigned long long>()(k.mAddr.sin_port) << 1) >> 1)
-			 ^ ((std::hash<unsigned long long>()(k.mAddr.sin_addr.s_addr) << 2) >> 2));
+	return (    (std::hash<unsigned long long>()(k.mSinFamily) << 1)
+		     ^ ((std::hash<unsigned long long>()(k.mSinPort) << 1) >> 1)
+			 ^ ((std::hash<unsigned long long>()(k.mSinAddr) << 2) >> 2));
 }
 
 bool gs_addr_equal_t::operator()(const GsAddr &a, const GsAddr &b) const {
-	return a.mAddr.sin_family == b.mAddr.sin_family
-		&& a.mAddr.sin_port == b.mAddr.sin_port
-		&& a.mAddr.sin_addr.s_addr == b.mAddr.sin_addr.s_addr;
+	return a.mSinPort == b.mSinFamily
+		&& a.mSinPort == b.mSinPort
+		&& a.mSinAddr == b.mSinAddr;
 }
 
 bool gs_addr_p_less_t::operator()(GsAddr * const &a, GsAddr * const &b) const {
@@ -161,7 +159,17 @@ size_t gs_addr_rawhash(struct GsAddr *Addr)
 
 size_t gs_addr_port(struct GsAddr *Addr)
 {
-	return ntohs(Addr->mAddr.sin_port);
+	return Addr->mSinPort;
+}
+
+int gs_addr_sockaddr_in(const struct GsAddr *Addr, struct sockaddr_in *SockAddr)
+{
+	if (Addr->mSinFamily != AF_INET)
+		return 1;
+	SockAddr->sin_family = AF_INET;
+	SockAddr->sin_port = htons(Addr->mSinPort);
+	SockAddr->sin_addr.s_addr = htonl(Addr->mSinAddr);
+	return 0;
 }
 
 int gs_eventfd_read(int EvtFd)
@@ -221,12 +229,12 @@ int gs_vserv_receive_evt_normal(
 	/* remember to read until EAGAIN for edge-triggered epoll (EPOLLET) */
 	while (! DoneReading) {
 		ssize_t NRecv = 0;
-		struct sockaddr_in Addr = {};
-		socklen_t AddrSize = sizeof Addr;
+		struct sockaddr_in SockAddr = {};
+		socklen_t SockAddrSize = sizeof SockAddr;
 		struct GsPacket Packet = {};
-		struct GsAddr Address = {};
+		struct GsAddr Addr = {};
 		struct GsVServRespond Respond = {};
-		while (-1 == (NRecv = recvfrom(Fd, UdpBuf, LenUdp, MSG_TRUNC, (struct sockaddr *)&Addr, &AddrSize))) {
+		while (-1 == (NRecv = recvfrom(Fd, UdpBuf, LenUdp, MSG_TRUNC, (struct sockaddr *)&SockAddr, &SockAddrSize))) {
 			if (errno == EINTR)
 				continue;
 			if (errno == EAGAIN || errno == EWOULDBLOCK) {
@@ -239,15 +247,17 @@ int gs_vserv_receive_evt_normal(
 		if (NRecv > LenUdp)
 			GS_ERR_CLEAN(1);
 		/* detect somehow receiving from wrong address family? */
-		if (AddrSize != sizeof Addr || Addr.sin_family != AF_INET)
+		if (SockAddrSize != sizeof SockAddr || SockAddr.sin_family != AF_INET)
 			GS_ERR_CLEAN(1);
 		/* dispatch datagram */
 		Packet.data = (uint8_t *)UdpBuf;
 		Packet.dataLength = NRecv;
-		Address.mAddr = Addr;
+		Addr.mSinFamily = SockAddr.sin_family;
+		Addr.mSinPort = ntohs(SockAddr.sin_port);
+		Addr.mSinAddr = ntohl(SockAddr.sin_addr.s_addr);
 		Respond.mServCtl = ServCtl;
 		Respond.mSockIdx = EPollCtx->mSockIdx;
-		if (!!(r = ServCtl->mCb->CbCrank(ServCtl->mCb, &Packet, &Address, &Respond)))
+		if (!!(r = ServCtl->mCb->CbCrank(ServCtl->mCb, &Packet, &Addr, &Respond)))
 			GS_GOTO_CLEAN();
 	}
 donereading:
@@ -698,7 +708,10 @@ int gs_vserv_write_drain_to(struct GsVServCtl *ServCtl, size_t SockIdx, int *oHa
 
 	for (it = Write->mQueue.begin(); it != Write->mQueue.end(); ++it) {
 		ssize_t NSent = 0;
-		while (-1 == (NSent = sendto(Fd, it->mElt.mData.get(), it->mElt.mLenData, MSG_NOSIGNAL, (struct sockaddr *) &it->mAddr.mAddr, sizeof it->mAddr.mAddr))) {
+		struct sockaddr_in SockAddr = {};
+		if (!!(r = gs_addr_sockaddr_in(&it->mAddr, &SockAddr)))
+			GS_GOTO_CLEAN();
+		while (-1 == (NSent = sendto(Fd, it->mElt.mData.get(), it->mElt.mLenData, MSG_NOSIGNAL, (struct sockaddr *) &SockAddr, sizeof SockAddr))) {
 			if (errno == EINTR)
 				continue;
 			if (errno == EAGAIN || errno == EWOULDBLOCK) {
@@ -743,7 +756,10 @@ int gs_vserv_respond_enqueue(
 	if (Write->mTryAtOnce) {
 		for (size_t NumWrite = 0; NumWrite < LenAddrVec; NumWrite++) {
 			ssize_t NSent = 0;
-			while (-1 == (NSent = sendto(Fd, DataBuf, LenData, MSG_NOSIGNAL, (struct sockaddr *) &AddrVec[NumWrite]->mAddr, sizeof AddrVec[NumWrite]->mAddr))) {
+			struct sockaddr_in SockAddr = {};
+			if (!!(r = gs_addr_sockaddr_in(AddrVec[NumWrite], &SockAddr)))
+				GS_GOTO_CLEAN();
+			while (-1 == (NSent = sendto(Fd, DataBuf, LenData, MSG_NOSIGNAL, (struct sockaddr *) &SockAddr, sizeof SockAddr))) {
 				if (errno == EINTR)
 					continue;
 				if (errno == EAGAIN || errno == EWOULDBLOCK)

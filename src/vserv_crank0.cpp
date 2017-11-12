@@ -59,7 +59,7 @@ struct GsVServConExt
 {
 	struct GsAuxConfigCommonVars mCommonVars; /*notowned*/
 	struct GsVServManageId *mManageId;
-	std::map<GsAddr *, sp<GsVServUser>, gs_addr_p_less_t> mUsers;
+	std::map<GsAddr, sp<GsVServUser>, gs_addr_p_less_t> mUsers;
 	sp<GsVServGroupAll> mGroupAll;
 };
 
@@ -200,12 +200,12 @@ int gs_vserv_crank0(struct GsVServCtlCb *Cb, struct GsPacket *Packet, struct GsA
 
 	GS_LOG(I, PF, "pkt [%d]", (int)Packet->dataLength);
 
-	if (Ext->mUsers.find(Addr) == Ext->mUsers.end()) {
+	if (Ext->mUsers.find(*Addr) == Ext->mUsers.end()) {
 		struct GsVServUser *User = NULL;
 		if (!!(r = gs_vserv_user_create(Ext->mManageId, &User)))
 			GS_GOTO_CLEAN_J(user);
-		Ext->mUsers[Addr] = sp<GsVServUser>(GS_ARGOWN(&User), gs_vserv_user_destroy);
-		GS_LOG(I, PF, "newcon [port=%d, id=%d]", (int) gs_addr_port(Addr), (int) Ext->mUsers[Addr]->mId);
+		Ext->mUsers[*Addr] = sp<GsVServUser>(GS_ARGOWN(&User), gs_vserv_user_destroy);
+		GS_LOG(I, PF, "newcon [port=%d, id=%d]", (int) gs_addr_port(Addr), (int) Ext->mUsers[*Addr]->mId);
 	clean_user:
 		GS_DELETE_F(&User, gs_vserv_user_destroy);
 	}
@@ -224,7 +224,7 @@ int gs_vserv_crank0(struct GsVServCtlCb *Cb, struct GsPacket *Packet, struct GsA
 		if (!!(r = gs_packet_copy_create(Packet, &PacketCpy, &LenPacketCpy)))
 			GS_GOTO_CLEAN_J(broadcast);
 		for (auto it = Ext->mUsers.begin(); it != Ext->mUsers.end(); ++it)
-			AddrVec[TmpCnt++] = it->first;
+			AddrVec[TmpCnt++] = &it->first;
 		if (!!(r = gs_vserv_respond_enqueue_free(Respond, GS_ARGOWN(&PacketCpy), LenPacketCpy, AddrVec, Ext->mUsers.size())))
 			GS_GOTO_CLEAN_J(broadcast);
 
