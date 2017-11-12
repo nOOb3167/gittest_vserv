@@ -30,13 +30,6 @@
 #define GS_VSERV_SEND_NUMIOVEC 3
 #define GS_VSERV_UDP_SIZE_MAX 65535
 
-struct GsAddr
-{
-	unsigned long long mSinFamily; /*AF_UNIX*/
-	unsigned long long mSinPort; /*host byte order*/
-	unsigned long long mSinAddr; /*host byte order*/
-};
-
 struct GsVServCtl
 {
 	size_t mNumThread;
@@ -128,8 +121,8 @@ bool gs_addr_equal_t::operator()(const GsAddr &a, const GsAddr &b) const {
 		&& a.mSinAddr == b.mSinAddr;
 }
 
-bool gs_addr_p_less_t::operator()(GsAddr * const &a, GsAddr * const &b) const {
-	return gs_addr_hash_t()(*a) < gs_addr_hash_t()(*b);
+bool gs_addr_less_t::operator()(const GsAddr &a, const GsAddr &b) const {
+	return gs_addr_hash_t()(a) < gs_addr_hash_t()(b);
 }
 
 /** needs to be destructible by regular free(2) (ex gs_vserv_write_elt_del_sp_free) */

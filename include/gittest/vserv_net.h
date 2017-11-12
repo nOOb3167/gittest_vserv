@@ -18,16 +18,9 @@
 #define GS_ADDR_RAWHASH_BUCKET(RAWHASH, NUM_BUCKETS) ((RAWHASH) % (NUM_BUCKETS))
 
 /* intended to be forward-declared in header (API use pointer only) */
-struct GsAddr;
 struct GsVServCtl;
 struct GsVServRespond;
 struct GsVServWrite;
-
-#ifdef __cplusplus
-struct gs_addr_hash_t { size_t operator()(const struct GsAddr &k) const; };
-struct gs_addr_equal_t { bool operator()(const GsAddr &a, const GsAddr &b) const; };
-struct gs_addr_p_less_t { bool operator()(GsAddr * const &a, GsAddr * const &b) const; };
-#endif /* __cplusplus */
 
 /* receives pointer (Data) to the to-be-deleted data pointer (*Data)
    deletion must be skipped if *Data is NULL
@@ -35,6 +28,19 @@ struct gs_addr_p_less_t { bool operator()(GsAddr * const &a, GsAddr * const &b) 
 typedef int (*gs_data_deleter_t)(uint8_t **Data);
 /* single indirection version of gs_data_deleter_t */
 typedef int (*gs_data_deleter_sp_t)(uint8_t *Data);
+
+struct GsAddr
+{
+	unsigned long long mSinFamily; /*AF_UNIX*/
+	unsigned long long mSinPort; /*host byte order*/
+	unsigned long long mSinAddr; /*host byte order*/
+};
+
+#ifdef __cplusplus
+struct gs_addr_hash_t { size_t operator()(const struct GsAddr &k) const; };
+struct gs_addr_equal_t { bool operator()(const GsAddr &a, const GsAddr &b) const; };
+struct gs_addr_less_t { bool operator()(const GsAddr &a, const GsAddr &b) const; };
+#endif /* __cplusplus */
 
 enum GsSockType
 {

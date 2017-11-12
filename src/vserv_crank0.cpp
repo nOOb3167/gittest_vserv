@@ -59,7 +59,7 @@ struct GsVServConExt
 {
 	struct GsAuxConfigCommonVars mCommonVars; /*notowned*/
 	struct GsVServManageId *mManageId;
-	std::map<GsAddr, sp<GsVServUser>, gs_addr_p_less_t> mUsers;
+	std::map<GsAddr, sp<GsVServUser>, gs_addr_less_t> mUsers;
 	sp<GsVServGroupAll> mGroupAll;
 };
 
@@ -107,6 +107,7 @@ int gs_vserv_manage_id_genid(struct GsVServManageId *ManageId, gs_vserv_user_id_
 	}
 
 	ManageId->mTaken.insert(Counter);
+	ManageId->mCounter = Counter;
 
 	if (oId)
 		*oId = Counter;
@@ -159,7 +160,7 @@ int gs_vserv_user_create(struct GsVServManageId *ManageId, struct GsVServUser **
 		GS_GOTO_CLEAN();
 
 	if (oUser)
-		*oUser = User;
+		*oUser = GS_ARGOWN(&User);
 
 clean:
 	GS_DELETE(&User, struct GsVServUser);
