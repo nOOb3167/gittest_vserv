@@ -254,7 +254,7 @@ int gs_vserv_crank0(struct GsVServCtlCb *Cb, struct GsPacket *Packet, struct GsA
 		if (gs_packet_space(Packet, (Offset += 1), 4 /*idnum*/))
 			GS_ERR_CLEAN_J(groupset, 1);
 
-		IdNum = gs_read_uint(Packet->data);
+		IdNum = gs_read_uint(Packet->data + Offset);
 
 		if (gs_packet_space(Packet, (Offset += 4), 2 * IdNum /*idvec*/))
 			GS_ERR_CLEAN_J(groupset, 1);
@@ -293,6 +293,7 @@ int gs_vserv_crank0(struct GsVServCtlCb *Cb, struct GsPacket *Packet, struct GsA
 		if (!!r)
 			GS_GOTO_CLEAN();
 	}
+	break;
 
 	default:
 		GS_ASSERT(0);
