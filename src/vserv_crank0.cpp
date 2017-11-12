@@ -100,7 +100,7 @@ int gs_vserv_manage_id_genid(struct GsVServManageId *ManageId, gs_vserv_user_id_
 	uint16_t Counter = ManageId->mCounter % UINT16_MAX;
 	size_t RetryLimit = UINT16_MAX;
 
-	while (ManageId->mTaken.find(Counter) == ManageId->mTaken.end()) {
+	while (ManageId->mTaken.find(Counter) != ManageId->mTaken.end()) {
 		Counter = (Counter + 1) % UINT16_MAX;
 		if (RetryLimit-- == 0)
 			GS_ERR_CLEAN(1);
