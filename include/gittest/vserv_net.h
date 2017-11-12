@@ -56,6 +56,7 @@ struct GsVServCtlCb
 
 
 int gs_packet_copy_create(struct GsPacket *Packet, uint8_t **oABuf, size_t *oLenA);
+int gs_packet_space(struct GsPacket *Packet, size_t Offset, size_t SpaceRequired);
 
 size_t gs_addr_rawhash(struct GsAddr *Addr);
 size_t gs_addr_port(struct GsAddr *Addr);

@@ -149,6 +149,11 @@ int gs_packet_copy_create(struct GsPacket *Packet, uint8_t **oABuf, size_t *oLen
 	return 0;
 }
 
+int gs_packet_space(struct GsPacket *Packet, size_t Offset, size_t SpaceRequired)
+{
+	return Offset + SpaceRequired > Packet->dataLength;
+}
+
 size_t gs_addr_rawhash(struct GsAddr *Addr)
 {
 	return gs_addr_hash_t()(*Addr);
