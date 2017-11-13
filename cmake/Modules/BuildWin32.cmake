@@ -6,6 +6,7 @@ SET(GITTEST_PLAT_HEADERS_NIX
 )
 SET(GITTEST_PLAT_SOURCES_NIX
   src/vserv_net_nix.cpp
+  src/vserv_enet.cpp
   src/vserv_net_main.cpp
   src/vserv_crank0.cpp
   ${GITTEST_COMMON_SOURCES_NIX}
@@ -13,9 +14,13 @@ SET(GITTEST_PLAT_SOURCES_NIX
 
 # search for all needed packages
 
+FIND_PACKAGE(ENet REQUIRED)
+
 SET(GITTEST_DEP_INCLUDE_DIRS
+  ${ENET_INCLUDE_DIR}
 )
 SET (GITTEST_DEP_LIBRARIES
+  ${ENET_LIBRARIES}
 )
 
 SET(GITTEST_SELFUP_INCLUDE_DIRS

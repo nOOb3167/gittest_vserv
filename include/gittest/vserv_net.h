@@ -20,6 +20,7 @@
 /* intended to be forward-declared in header (API use pointer only) */
 struct GsVServCtl;
 struct GsVServRespond;
+struct GsVServRespondM;
 struct GsVServWrite;
 
 /* receives pointer (Data) to the to-be-deleted data pointer (*Data)
@@ -58,6 +59,7 @@ struct GsPacket
 struct GsVServCtlCb
 {
 	int(*CbCrank)(struct GsVServCtlCb *Cb, struct GsPacket *Packet, struct GsAddr *Addr, struct GsVServRespond *Respond);
+	int(*CbCrankM)(struct GsVServCtlCb *Cb, struct GsPacket *Packet, struct GsAddr *Addr, struct GsVServRespondM *Respond);
 };
 
 

@@ -16,7 +16,7 @@ typedef uint16_t gs_vserv_user_id_t;
 
 enum GsVServCmd {
 	GS_VSERV_CMD_BROADCAST = 'b',
-	GS_VSERV_CMD_GROUPSET = 's',
+	GS_VSERV_M_CMD_GROUPSET = 's',
 	GS_VSERV_CMD_GROUP_MODE_MSG = 'm',
 };
 
@@ -321,7 +321,7 @@ int gs_vserv_crank0(struct GsVServCtlCb *Cb, struct GsPacket *Packet, struct GsA
 	}
 	break;
 
-	case GS_VSERV_CMD_GROUPSET:
+	case GS_VSERV_M_CMD_GROUPSET:
 	{
 		/* (cmd)[1], (idnum)[4], (idvec[idnum])[2*idnum], (sznum)[4], (szvec[sznum])(2*sznum) */
 
@@ -444,6 +444,12 @@ clean:
 	return r;
 }
 
+int gs_vserv_crankm0(struct GsVServCtlCb *Cb, struct GsPacket *Packet, struct GsAddr *Addr, struct GsVServRespondM *Respond)
+{
+	GS_ASSERT(0);
+	return 0;
+}
+
 int gs_vserv_start_crank0(struct GsAuxConfigCommonVars *CommonVars)
 {
 	int r = 0;
@@ -469,6 +475,7 @@ int gs_vserv_start_crank0(struct GsAuxConfigCommonVars *CommonVars)
 
 	Cb0 = new GsVServCtlCb0();
 	Cb0->base.CbCrank = gs_vserv_crank0;
+	Cb0->base.CbCrankM = gs_vserv_crankm0;
 	Cb0->Ext = GS_ARGOWN(&Ext);
 
 	ServFd.resize(1, -1);

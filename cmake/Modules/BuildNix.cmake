@@ -6,12 +6,15 @@ SET(GITTEST_VSERV_HEADERS
 )
 SET(GITTEST_VSERV_SOURCES
   src/vserv_net_nix.cpp
+  src/vserv_enet.cpp
   src/vserv_net_main.cpp
   src/vserv_crank0.cpp
   ${GITTEST_LIB_SOURCES}
 )
 
 # search for all needed packages
+
+FIND_PACKAGE(ENet REQUIRED)
 
 ## http://stackoverflow.com/questions/1620918/cmake-and-libpthread/29871891#29871891
 ## https://cmake.org/cmake/help/v3.6/module/FindThreads.html
@@ -21,8 +24,10 @@ SET(THREADS_PREFER_PTHREAD_FLAG ON)
 FIND_PACKAGE(Threads REQUIRED)
 
 SET(GITTEST_DEP_INCLUDE_DIRS
+  ${ENET_INCLUDE_DIR}
 )
 SET (GITTEST_DEP_LIBRARIES
+  ${ENET_LIBRARIES}
   Threads::Threads
 )
 
