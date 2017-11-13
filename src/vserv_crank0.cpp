@@ -11,6 +11,8 @@
 #include <gittest/filesys.h>
 #include <gittest/vserv_net.h>
 
+#define GS_VSERV_USER_ID_INVALID 0xFFFF
+
 typedef uint8_t gs_vserv_group_mode_t;
 typedef uint16_t gs_vserv_user_id_t;
 
@@ -18,6 +20,7 @@ enum GsVServCmd {
 	GS_VSERV_CMD_BROADCAST = 'b',
 	GS_VSERV_M_CMD_GROUPSET = 's',
 	GS_VSERV_CMD_GROUP_MODE_MSG = 'm',
+	GS_VSERV_CMD_IDENT = 'i',
 };
 
 enum GsVServGroupMode
@@ -38,24 +41,11 @@ struct GsVServGroupAll
 	std::map<gs_vserv_user_id_t, std::pair<gs_vserv_user_id_t *, uint16_t> > mCacheIdGroup;
 };
 
-struct GsVServGroup
-{
-	sp<GsVServGroupAll> mAll;
-	size_t mMyOffset;
-	size_t mMySize;
-};
-
-struct GsVServUserGroup
-{
-	sp<GsVServGroup> mModeS;
-};
-
 struct GsVServUser
 {
-	// name
-	// serv
+	uint8_t *mNameBuf; size_t mLenName;
+	uint8_t *mServBuf; size_t mLenServ;
 	gs_vserv_user_id_t mId;
-	struct GsVServUserGroup mGroup;
 };
 
 struct GsVServConExt
@@ -196,17 +186,15 @@ int gs_vserv_groupall_lookup(
 	return 0;
 }
 
-int gs_vserv_user_create(struct GsVServManageId *ManageId, struct GsVServUser **oUser)
+int gs_vserv_user_create(struct GsVServUser **oUser)
 {
 	int r = 0;
 
 	struct GsVServUser *User = new GsVServUser();
 
-	User->mGroup; /*dummy*/
-
-	// FIXME: release the id on error
-	if (gs_vserv_manage_id_genid(ManageId, &User->mId))
-		GS_GOTO_CLEAN();
+	User->mNameBuf = NULL; User->mLenName = 0;
+	User->mServBuf = NULL; User->mLenServ = 0;
+	User->mId = GS_VSERV_USER_ID_INVALID;
 
 	if (oUser)
 		*oUser = GS_ARGOWN(&User);
@@ -222,6 +210,12 @@ int gs_vserv_user_destroy(struct GsVServUser *User)
 	// FIXME: conditionally (?) release the id if still owned at destruction time
 	GS_DELETE(&User, struct GsVServUser);
 	return 0;
+}
+
+int gs_vserv_user_genid(struct GsVServUser *User, struct GsVServManageId *ManageId)
+{
+	// FIXME: surely will leak id if old one was not released
+	return gs_vserv_manage_id_genid(ManageId, &User->mId);
 }
 
 int gs_vserv_enqueue_idvec(
@@ -283,11 +277,15 @@ int gs_vserv_crank0(struct GsVServCtlCb *Cb, struct GsPacket *Packet, struct GsA
 
 	struct GsVServConExt *Ext = ((struct GsVServCtlCb0 *) Cb)->Ext;
 
+	sp<GsVServUser> User;
+
 	GS_LOG(I, PF, "pkt [%d]", (int)Packet->dataLength);
 
 	if (Ext->mUsers.find(*Addr) == Ext->mUsers.end()) {
 		struct GsVServUser *User = NULL;
-		if (!!(r = gs_vserv_user_create(Ext->mManageId, &User)))
+		if (!!(r = gs_vserv_user_create(&User)))
+			GS_GOTO_CLEAN_J(user);
+		if (!!(r = gs_vserv_user_genid(User, Ext->mManageId)))
 			GS_GOTO_CLEAN_J(user);
 		Ext->mUserIdAddr[User->mId] = *Addr;
 		Ext->mUsers[*Addr] = sp<GsVServUser>(GS_ARGOWN(&User), gs_vserv_user_destroy);
@@ -296,10 +294,58 @@ int gs_vserv_crank0(struct GsVServCtlCb *Cb, struct GsPacket *Packet, struct GsA
 		GS_DELETE_F(&User, gs_vserv_user_destroy);
 	}
 
-	if (Packet->dataLength < 4)
+	User = Ext->mUsers[*Addr];
+
+	if (gs_packet_space(Packet, 0, 1))
 		GS_ERR_CLEAN(1);
 
 	switch (Packet->data[0]) {
+
+	case GS_VSERV_CMD_IDENT:
+	{
+		/* (cmd)[1], (lenname)[4], (lenserv)[4], (name)[lenname], (serv)[lenserv] */
+
+		struct GsVServUser *UserN = NULL;
+
+		size_t Offset = 0;
+		uint32_t LenName = 0;
+		uint32_t LenServ = 0;
+		uint8_t *NameBuf = NULL;
+		uint8_t *ServBuf = NULL;
+
+		if (gs_packet_space(Packet, (Offset += 1), 4 /*lenname*/ + 4 /*lenserv*/))
+			GS_ERR_CLEAN_J(ident, 1);
+
+		LenName = gs_read_uint(Packet->data + Offset);
+		LenServ = gs_read_uint(Packet->data + Offset + 4);
+
+		if (gs_packet_space(Packet, (Offset += 8), LenName + LenServ))
+			GS_ERR_CLEAN_J(ident, 1);
+
+		if (!(NameBuf = (uint8_t *)malloc(LenName)))
+			GS_ERR_CLEAN_J(ident, 1);
+
+		if (!(ServBuf = (uint8_t *)malloc(LenServ)))
+			GS_ERR_CLEAN_J(ident, 1);
+
+		memcpy(NameBuf, Packet->data + Offset, LenName);
+		memcpy(ServBuf, Packet->data + Offset + LenName, LenServ);
+
+		if (!!(r = gs_vserv_user_create(&UserN)))
+			GS_GOTO_CLEAN_J(ident);
+
+		UserN->mNameBuf = GS_ARGOWN(&NameBuf); UserN->mLenName = LenName;
+		UserN->mServBuf = GS_ARGOWN(&ServBuf); UserN->mLenServ = LenServ;
+		UserN->mId = User->mId;
+
+		// FIXME: state mutation
+		Ext->mUsers[*Addr] = sp<GsVServUser>(UserN, gs_vserv_user_destroy);
+
+	clean_ident:
+		if (!!r)
+			GS_GOTO_CLEAN();
+	}
+	break;
 
 	case GS_VSERV_CMD_BROADCAST:
 	{
@@ -446,6 +492,8 @@ clean:
 
 int gs_vserv_crankm0(struct GsVServCtlCb *Cb, struct GsPacket *Packet, struct GsAddr *Addr, struct GsVServRespondM *Respond)
 {
+	// FIXME: rework locking before processing these messages async?
+	//   for now, probably just mutex Ext wholesale
 	GS_ASSERT(0);
 	return 0;
 }
