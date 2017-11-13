@@ -339,7 +339,7 @@ int gs_vserv_crank0(struct GsVServCtlCb *Cb, struct GsPacket *Packet, struct GsA
 		UserN->mId = User->mId;
 
 		// FIXME: state mutation
-		Ext->mUsers[*Addr] = sp<GsVServUser>(UserN, gs_vserv_user_destroy);
+		Ext->mUsers[*Addr] = sp<GsVServUser>(GS_ARGOWN(&UserN), gs_vserv_user_destroy);
 
 	clean_ident:
 		if (!!r)
@@ -369,48 +369,37 @@ int gs_vserv_crank0(struct GsVServCtlCb *Cb, struct GsPacket *Packet, struct GsA
 
 	case GS_VSERV_M_CMD_GROUPSET:
 	{
-		/* (cmd)[1], (idnum)[4], (idvec[idnum])[2*idnum], (sznum)[4], (szvec[sznum])(2*sznum) */
+		/* (cmd)[1], (idnum)[4], (sznum)[4], (idvec[idnum])[2*idnum], (szvec[sznum])(2*sznum) */
 
 		struct GsVServGroupAll *GroupAll = NULL;
 
 		size_t Offset = 0;
 
-		gs_vserv_user_id_t *IdVec = NULL;
 		uint32_t IdNum = 0;
-		uint16_t *SizeVec = NULL;
 		uint32_t SizeNum = 0;
+		gs_vserv_user_id_t *IdVec = NULL;
+		uint16_t *SizeVec = NULL;
 
-		/* id vec */
-
-		if (gs_packet_space(Packet, (Offset += 1), 4 /*idnum*/))
+		if (gs_packet_space(Packet, (Offset += 1), 4 /*idnum*/ + 4 /*sznum*/))
 			GS_ERR_CLEAN_J(groupset, 1);
 
 		IdNum = gs_read_uint(Packet->data + Offset);
+		SizeNum = gs_read_uint(Packet->data + Offset + 4);
 
-		if (gs_packet_space(Packet, (Offset += 4), 2 * IdNum /*idvec*/))
+		if (gs_packet_space(Packet, (Offset += 8), 2 * IdNum /*idvec*/ + 2 * SizeNum /*szvec*/))
 			GS_ERR_CLEAN_J(groupset, 1);
 
 		if (!(IdVec = (gs_vserv_user_id_t *)malloc(sizeof *IdVec * IdNum)))
 			GS_ERR_CLEAN_J(groupset, 1);
 
-		for (size_t i = 0; i < IdNum; i++)
-			IdVec[i] = gs_read_short(Packet->data + Offset + (2 * i));
-
-		/* size vec */
-
-		if (gs_packet_space(Packet, (Offset += (2 * IdNum)), 4 /*sizenum*/))
-			GS_ERR_CLEAN_J(groupset, 1);
-
-		SizeNum = gs_read_uint(Packet->data + Offset);
-
-		if (gs_packet_space(Packet, (Offset += 4), 2 * SizeNum))
-			GS_ERR_CLEAN_J(groupset, 1);
-
 		if (!(SizeVec = (uint16_t *)malloc(sizeof *SizeVec * SizeNum)))
 			GS_ERR_CLEAN_J(groupset, 1);
 
+		for (size_t i = 0; i < IdNum; i++)
+			IdVec[i] = gs_read_short(Packet->data + Offset + (2 * i));
+
 		for (size_t i = 0; i < SizeNum; i++)
-			SizeVec[i] = gs_read_short(Packet->data + Offset + (2 * i));
+			SizeVec[i] = gs_read_short(Packet->data + Offset + (2 * IdNum) + (2 * i));
 
 		/* processing */
 
@@ -420,6 +409,7 @@ int gs_vserv_crank0(struct GsVServCtlCb *Cb, struct GsPacket *Packet, struct GsA
 		if (!!(r = gs_vserv_groupall_cache_refresh(GroupAll)))
 			GS_GOTO_CLEAN_J(groupset);
 
+		// FIXME: state mutation
 		Ext->mGroupAll = sp<GsVServGroupAll>(GS_ARGOWN(&GroupAll), gs_vserv_groupall_destroy);
 
 	clean_groupset:
