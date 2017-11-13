@@ -5,6 +5,7 @@
 #include <vector>
 #include <set>
 #include <map>
+#include <utility>
 
 #include <gittest/misc.h>
 #include <gittest/filesys.h>
@@ -16,6 +17,7 @@ typedef uint16_t gs_vserv_user_id_t;
 enum GsVServCmd {
 	GS_VSERV_CMD_BROADCAST = 'b',
 	GS_VSERV_CMD_GROUPSET = 's',
+	GS_VSERV_CMD_GROUP_MODE_MSG = 'm',
 };
 
 enum GsVServGroupMode
@@ -33,6 +35,7 @@ struct GsVServGroupAll
 {
 	gs_vserv_user_id_t *mIdVec; size_t mIdNum;
 	uint16_t *mSizeVec; size_t mSizeNum;
+	std::map<gs_vserv_user_id_t, std::pair<gs_vserv_user_id_t *, uint16_t> > mCacheIdGroup;
 };
 
 struct GsVServGroup
@@ -60,6 +63,7 @@ struct GsVServConExt
 	struct GsAuxConfigCommonVars mCommonVars; /*notowned*/
 	struct GsVServManageId *mManageId;
 	std::map<GsAddr, sp<GsVServUser>, gs_addr_less_t> mUsers;
+	std::map<gs_vserv_user_id_t, GsAddr> mUserIdAddr;
 	sp<GsVServGroupAll> mGroupAll;
 };
 
@@ -147,6 +151,51 @@ int gs_vserv_groupall_destroy(struct GsVServGroupAll *GroupAll)
 	return 0;
 }
 
+int gs_vserv_groupall_cache_refresh(struct GsVServGroupAll *GroupAll)
+{
+	int r = 0;
+
+	GroupAll->mCacheIdGroup.clear();
+
+	gs_vserv_user_id_t *Ptr = GroupAll->mIdVec;
+	
+	for (size_t i = 0; i < GroupAll->mSizeNum; i++) {
+		if (Ptr + GroupAll->mSizeVec[i] > GroupAll->mIdVec + GroupAll->mIdNum)
+			GS_ERR_CLEAN(1);
+		for (size_t j = 0; j < GroupAll->mSizeVec[i]; j++) {
+			auto itb = GroupAll->mCacheIdGroup.insert(std::make_pair(Ptr[j], std::make_pair(Ptr, GroupAll->mSizeVec[i])));
+			if (! itb.second) /* duplicate id in IdVec */
+				GS_ERR_CLEAN(1);
+		}
+		Ptr += GroupAll->mSizeVec[i];
+	}
+
+clean:
+
+	return r;
+}
+
+/** returned pointer / vec ownership does not transfer to caller
+    use of returned data must cease before caller allows GroupAll to be destroyed */
+int gs_vserv_groupall_lookup(
+	struct GsVServGroupAll *GroupAll,
+	gs_vserv_user_id_t Id,
+	gs_vserv_user_id_t **oIdVec, /*null-returnable*/
+	size_t *oIdNum)
+{
+	auto it = GroupAll->mCacheIdGroup.find(Id);
+
+	if (it == GroupAll->mCacheIdGroup.end()) {
+		*oIdVec = NULL;
+		*oIdNum = 0;
+	}
+	else {
+		*oIdVec = it->second.first;
+		*oIdNum = it->second.second;
+	}
+	return 0;
+}
+
 int gs_vserv_user_create(struct GsVServManageId *ManageId, struct GsVServUser **oUser)
 {
 	int r = 0;
@@ -173,6 +222,41 @@ int gs_vserv_user_destroy(struct GsVServUser *User)
 	// FIXME: conditionally (?) release the id if still owned at destruction time
 	GS_DELETE(&User, struct GsVServUser);
 	return 0;
+}
+
+int gs_vserv_enqueue_idvec(
+	struct GsVServRespond *Respond,
+	struct GsPacket *Packet,
+	gs_vserv_user_id_t *IdVec, size_t IdNum,
+	const std::map<gs_vserv_user_id_t, GsAddr> &UserIdAddr)
+{
+	int r = 0;
+
+	uint8_t *PacketCpy = NULL;
+	size_t LenPacketCpy = 0;
+	size_t TmpCnt = 0;
+	GS_ALLOCA_VAR(AddrVec, const struct GsAddr *, IdNum);
+	if (!!(r = gs_packet_copy_create(Packet, &PacketCpy, &LenPacketCpy)))
+		GS_GOTO_CLEAN();
+	for (size_t i = 0; i < IdNum; i++) {
+		auto itb = UserIdAddr.find(IdVec[i]);
+		if (itb == UserIdAddr.end())
+			GS_LOG(I, PF, "missing userid [id=%d]", (int) IdVec[i]);
+		else
+			AddrVec[TmpCnt++] = &itb->second;
+	}
+	if (!!(r = gs_vserv_respond_enqueue_free(Respond, GS_ARGOWN(&PacketCpy), LenPacketCpy, AddrVec, TmpCnt)))
+		GS_GOTO_CLEAN();
+
+clean:
+	GS_DELETE_F(&PacketCpy, gs_vserv_write_elt_del_sp_free);
+
+	return r;
+}
+
+uint8_t gs_read_byte(uint8_t *Ptr)
+{
+	return Ptr[0];
 }
 
 uint16_t gs_read_short(uint8_t *Ptr)
@@ -205,6 +289,7 @@ int gs_vserv_crank0(struct GsVServCtlCb *Cb, struct GsPacket *Packet, struct GsA
 		struct GsVServUser *User = NULL;
 		if (!!(r = gs_vserv_user_create(Ext->mManageId, &User)))
 			GS_GOTO_CLEAN_J(user);
+		Ext->mUserIdAddr[User->mId] = *Addr;
 		Ext->mUsers[*Addr] = sp<GsVServUser>(GS_ARGOWN(&User), gs_vserv_user_destroy);
 		GS_LOG(I, PF, "newcon [port=%d, id=%d]", (int) gs_addr_port(Addr), (int) Ext->mUsers[*Addr]->mId);
 	clean_user:
@@ -226,7 +311,7 @@ int gs_vserv_crank0(struct GsVServCtlCb *Cb, struct GsPacket *Packet, struct GsA
 			GS_GOTO_CLEAN_J(broadcast);
 		for (auto it = Ext->mUsers.begin(); it != Ext->mUsers.end(); ++it)
 			AddrVec[TmpCnt++] = &it->first;
-		if (!!(r = gs_vserv_respond_enqueue_free(Respond, GS_ARGOWN(&PacketCpy), LenPacketCpy, AddrVec, Ext->mUsers.size())))
+		if (!!(r = gs_vserv_respond_enqueue_free(Respond, GS_ARGOWN(&PacketCpy), LenPacketCpy, AddrVec, TmpCnt)))
 			GS_GOTO_CLEAN_J(broadcast);
 
 	clean_broadcast:
@@ -238,7 +323,7 @@ int gs_vserv_crank0(struct GsVServCtlCb *Cb, struct GsPacket *Packet, struct GsA
 
 	case GS_VSERV_CMD_GROUPSET:
 	{
-		/* (cmd)[1], (idnum)[4], (idvec[idnum])[2*idnum] */
+		/* (cmd)[1], (idnum)[4], (idvec[idnum])[2*idnum], (sznum)[4], (szvec[sznum])(2*sznum) */
 
 		struct GsVServGroupAll *GroupAll = NULL;
 
@@ -286,10 +371,64 @@ int gs_vserv_crank0(struct GsVServCtlCb *Cb, struct GsPacket *Packet, struct GsA
 		if (!!(r = gs_vserv_groupall_create(GS_ARGOWN(&IdVec), IdNum, GS_ARGOWN(&SizeVec), SizeNum, &GroupAll)))
 			GS_GOTO_CLEAN_J(groupset);
 
+		if (!!(r = gs_vserv_groupall_cache_refresh(GroupAll)))
+			GS_GOTO_CLEAN_J(groupset);
+
 		Ext->mGroupAll = sp<GsVServGroupAll>(GS_ARGOWN(&GroupAll), gs_vserv_groupall_destroy);
 
 	clean_groupset:
 		GS_DELETE_F(&GroupAll, gs_vserv_groupall_destroy);
+		if (!!r)
+			GS_GOTO_CLEAN();
+	}
+	break;
+
+	case GS_VSERV_CMD_GROUP_MODE_MSG:
+	{
+		/* (cmd)[1], (mode)[1], (id)[2], (blk)[2], (seq)[2], (data)[...] */
+
+		/* hold on to GroupAll (for synchronization purposes) */
+		sp<GsVServGroupAll> GroupAll = Ext->mGroupAll;
+
+		size_t Offset = 0;
+		uint8_t Mode = 0;
+		gs_vserv_user_id_t Id = 0;
+		uint16_t Blk = 0;
+		uint16_t Seq = 0;
+
+		if (gs_packet_space(Packet, (Offset += 1), 1 /*mode*/ + 2 /*id*/ + 2 /*blk*/ + 2 /*seq*/))
+			GS_ERR_CLEAN_J(groupmodemsg, 1);
+
+		Mode = gs_read_byte(Packet->data + Offset);
+		Id   = gs_read_short(Packet->data + Offset + 1);
+		Blk  = gs_read_short(Packet->data + Offset + 3);
+		Seq  = gs_read_short(Packet->data + Offset + 5);
+
+		Offset += 7; /* rest is data */
+
+		switch (Mode)
+		{
+			
+		case GS_VSERV_GROUP_MODE_S:
+		{
+			gs_vserv_user_id_t *IdVec = NULL;
+			size_t IdNum = 0;
+			if (!!(r = gs_vserv_groupall_lookup(GroupAll.get(), Id, &IdVec, &IdNum)))
+				GS_GOTO_CLEAN_J(groupmodemsg);
+			if (! IdVec) {
+				GS_LOG(I, PF, "ungrouped [id=%d]", (int)Id);
+				GS_ERR_CLEAN_J(groupmodemsg, 0);
+			}
+			if (!!(r = gs_vserv_enqueue_idvec(Respond, Packet, IdVec, IdNum, Ext->mUserIdAddr)))
+				GS_GOTO_CLEAN();
+		}
+		break;
+
+		default:
+			GS_ASSERT(0);
+		}
+
+	clean_groupmodemsg:
 		if (!!r)
 			GS_GOTO_CLEAN();
 	}
