@@ -599,6 +599,7 @@ int gs_vserv_start_crank0(struct GsAuxConfigCommonVars *CommonVars)
 	Ext->mCommonVars = *CommonVars;
 	Ext->mManageId = GS_ARGOWN(&ManageId);
 	Ext->mUsers; /*dummy*/
+	Ext->mUserIdAddr; /*dummy*/
 	Ext->mGroupAll = sp<GsVServGroupAll>(GS_ARGOWN(&GroupAll), gs_vserv_groupall_destroy);
 
 	Cb0 = new GsVServCtlCb0();
