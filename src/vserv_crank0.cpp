@@ -434,7 +434,7 @@ int gs_vserv_crank0(struct GsVServCtlCb *Cb, struct GsPacket *Packet, struct GsA
 		/* respond */
 
 		if (!!(r = gs_vserv_enqueue_idvec(Respond, &PacketOut, &User->mId, 1, Ext->mUserIdAddr)))
-			GS_GOTO_CLEAN_J(nameget, 1);
+			GS_GOTO_CLEAN_J(nameget);
 
 	clean_nameget:
 		if (!!r)
