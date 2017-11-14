@@ -64,7 +64,8 @@ struct GsVServConExt
 struct GsVServCtlCb0
 {
 	struct GsVServCtlCb base;
-	struct GsVServConExt *Ext; /*owned*/
+	struct GsVServConExt *mExt; /*owned*/
+	struct GsVServLock *mLock; /*owned*/
 };
 
 int gs_vserv_manage_id_create(struct GsVServManageId **oManageId)
@@ -298,9 +299,13 @@ int gs_vserv_crank0(struct GsVServCtlCb *Cb, struct GsPacket *Packet, struct GsA
 {
 	int r = 0;
 
-	struct GsVServConExt *Ext = ((struct GsVServCtlCb0 *) Cb)->Ext;
+	struct GsVServCtlCb0 *Cb0 = (struct GsVServCtlCb0 *) Cb;
+	struct GsVServConExt *Ext = Cb0->mExt;
 
 	sp<GsVServUser> User;
+
+	if (!!(r = gs_vserv_lock_lock(Cb0->mLock)))
+		GS_GOTO_CLEAN();
 
 	GS_LOG(I, PF, "pkt [%d]", (int)Packet->dataLength);
 
@@ -566,16 +571,25 @@ int gs_vserv_crank0(struct GsVServCtlCb *Cb, struct GsPacket *Packet, struct GsA
 	}
 
 clean:
+	GS_RELEASE_F(Cb0->mLock, gs_vserv_lock_release);
 
 	return r;
 }
 
 int gs_vserv_crankm0(struct GsVServCtlCb *Cb, struct GsPacket *Packet, struct GsAddr *Addr, struct GsVServRespondM *Respond)
 {
-	// FIXME: rework locking before processing these messages async?
-	//   for now, probably just mutex Ext wholesale
-	GS_ASSERT(0);
-	return 0;
+	int r = 0;
+
+	struct GsVServCtlCb0 *Cb0 = (struct GsVServCtlCb0 *) Cb;
+	struct GsVServConExt *Ext = Cb0->mExt;
+
+	if (!!(r = gs_vserv_lock_lock(Cb0->mLock)))
+		GS_GOTO_CLEAN();
+
+clean:
+	GS_RELEASE_F(Cb0->mLock, gs_vserv_lock_release);
+
+	return r;
 }
 
 int gs_vserv_start_crank0(struct GsAuxConfigCommonVars *CommonVars)
@@ -605,7 +619,10 @@ int gs_vserv_start_crank0(struct GsAuxConfigCommonVars *CommonVars)
 	Cb0 = new GsVServCtlCb0();
 	Cb0->base.CbCrank = gs_vserv_crank0;
 	Cb0->base.CbCrankM = gs_vserv_crankm0;
-	Cb0->Ext = GS_ARGOWN(&Ext);
+	Cb0->mExt = GS_ARGOWN(&Ext);
+	Cb0->mLock = NULL;
+	if (!!(r = gs_vserv_lock_create(&Cb0->mLock)))
+		GS_GOTO_CLEAN();
 
 	ServFd.resize(1, -1);
 
@@ -620,6 +637,7 @@ int gs_vserv_start_crank0(struct GsAuxConfigCommonVars *CommonVars)
 
 clean:
 	GS_DELETE_F(&ServCtl, gs_vserv_ctl_destroy);
+	// FIXME: GS_DELETE_F(&Cb0, gs_vserv_ctl_cb0_destroy);
 	// FIXME: GS_DELETE_F(&Ext, gs_vserv_con_ext_destroy);
 	GS_DELETE_F(&GroupAll, gs_vserv_groupall_destroy);
 	GS_DELETE_F(&ManageId, gs_vserv_manage_id_destroy);

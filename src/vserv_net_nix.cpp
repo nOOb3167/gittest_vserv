@@ -30,6 +30,12 @@
 #define GS_VSERV_SEND_NUMIOVEC 3
 #define GS_VSERV_UDP_SIZE_MAX 65535
 
+struct GsVServLock
+{
+	pthread_mutex_t mMutex;
+	bool mHaveLock;
+};
+
 struct GsVServCtl
 {
 	size_t mNumThread;
@@ -123,6 +129,60 @@ bool gs_addr_equal_t::operator()(const GsAddr &a, const GsAddr &b) const {
 
 bool gs_addr_less_t::operator()(const GsAddr &a, const GsAddr &b) const {
 	return gs_addr_hash_t()(a) < gs_addr_hash_t()(b);
+}
+
+int gs_vserv_lock_create(struct GsVServLock **oLock)
+{
+	int r = 0;
+
+	struct GsVServLock *Lock = new GsVServLock();
+
+	if (!! pthread_mutex_init(&Lock->mMutex, NULL))
+		GS_ERR_CLEAN(1);
+	Lock->mHaveLock = 0;
+
+	if (oLock)
+		*oLock = GS_ARGOWN(&Lock);
+
+clean:
+	GS_DELETE(&Lock, struct GsVServLock);
+
+	return r;
+}
+
+int gs_vserv_lock_destroy(struct GsVServLock *Lock)
+{
+	if (Lock) {
+		if (!! pthread_mutex_destroy(&Lock->mMutex))
+			GS_ASSERT(0);
+		GS_DELETE(&Lock, struct GsVServLock);
+	}
+	return 0;
+}
+
+int gs_vserv_lock_lock(struct GsVServLock *Lock)
+{
+	if (!! pthread_mutex_lock(&Lock->mMutex))
+		return 1;
+	Lock->mHaveLock = 1;
+	return 0;
+}
+
+int gs_vserv_lock_unlock(struct GsVServLock *Lock)
+{
+	/* NOTE: HaveLock zeroes before actually unlocking */
+	Lock->mHaveLock = 0;
+	if (!! pthread_mutex_unlock(&Lock->mMutex))
+		return 1;
+	return 0;
+}
+
+int gs_vserv_lock_release(struct GsVServLock *Lock)
+{
+	if (Lock->mHaveLock)
+		if (!! pthread_mutex_unlock(&Lock->mMutex))
+			return 1;
+	return 0;
 }
 
 /** needs to be destructible by regular free(2) (ex gs_vserv_write_elt_del_sp_free) */

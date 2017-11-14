@@ -19,6 +19,7 @@
 #define GS_ADDR_RAWHASH_BUCKET(RAWHASH, NUM_BUCKETS) ((RAWHASH) % (NUM_BUCKETS))
 
 /* intended to be forward-declared in header (API use pointer only) */
+struct GsVServLock;
 struct GsVServCtl;
 struct GsVServRespond;
 struct GsVServRespondM;
@@ -63,6 +64,11 @@ struct GsVServCtlCb
 	int(*CbCrankM)(struct GsVServCtlCb *Cb, struct GsPacket *Packet, struct GsAddr *Addr, struct GsVServRespondM *Respond);
 };
 
+int gs_vserv_lock_create(struct GsVServLock **oLock);
+int gs_vserv_lock_destroy(struct GsVServLock *Lock);
+int gs_vserv_lock_lock(struct GsVServLock *Lock);
+int gs_vserv_lock_unlock(struct GsVServLock *Lock);
+int gs_vserv_lock_release(struct GsVServLock *Lock);
 
 int gs_packet_copy_create(struct GsPacket *Packet, uint8_t **oABuf, size_t *oLenA);
 int gs_packet_space(struct GsPacket *Packet, size_t Offset, size_t SpaceRequired);
