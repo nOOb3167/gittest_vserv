@@ -13,6 +13,8 @@
 
 #define GS_VSERV_USER_ID_INVALID 0xFFFF
 
+#define GS_VSERV_NAMELEN_ARBITRARY_SIZE_MAX 1472
+
 typedef uint8_t gs_vserv_group_mode_t;
 typedef uint16_t gs_vserv_user_id_t;
 
@@ -21,6 +23,8 @@ enum GsVServCmd {
 	GS_VSERV_M_CMD_GROUPSET = 's',
 	GS_VSERV_CMD_GROUP_MODE_MSG = 'm',
 	GS_VSERV_CMD_IDENT = 'i',
+	GS_VSERV_CMD_NAMEGET = 'n',
+	GS_VSERV_CMD_NAMES = 'N',
 };
 
 enum GsVServGroupMode
@@ -271,6 +275,25 @@ uint32_t gs_read_uint(uint8_t *Ptr)
 	return r;
 }
 
+void gs_write_byte(uint8_t *Ptr, uint8_t Byte)
+{
+	Ptr[0] = Byte;
+}
+
+void gs_write_short(uint8_t *Ptr, uint16_t UShort)
+{
+	Ptr[0] = (UShort & 0xFF);
+	Ptr[1] = ((UShort >> 8) & 0xFF);
+}
+
+void gs_write_uint(uint8_t *Ptr, uint32_t UInt)
+{
+	Ptr[0] = (UInt & 0xFF);
+	Ptr[1] = ((UInt >> 8) & 0xFF);
+	Ptr[2] = ((UInt >> 16) & 0xFF);
+	Ptr[3] = ((UInt >> 24) & 0xFF);
+}
+
 int gs_vserv_crank0(struct GsVServCtlCb *Cb, struct GsPacket *Packet, struct GsAddr *Addr, struct GsVServRespond *Respond)
 {
 	int r = 0;
@@ -342,6 +365,73 @@ int gs_vserv_crank0(struct GsVServCtlCb *Cb, struct GsPacket *Packet, struct GsA
 		Ext->mUsers[*Addr] = sp<GsVServUser>(GS_ARGOWN(&UserN), gs_vserv_user_destroy);
 
 	clean_ident:
+		if (!!r)
+			GS_GOTO_CLEAN();
+	}
+	break;
+
+	case GS_VSERV_CMD_NAMEGET:
+	{
+		/* (cmd)[1], (idvec)[2*..] */
+
+		size_t Offset = 1;
+		size_t IdNum = 0;
+		gs_vserv_user_id_t *IdVec = NULL;
+
+		uint8_t *OutBuf = NULL;
+		size_t LenOut = 0;
+		const size_t LimitOut = GS_VSERV_NAMELEN_ARBITRARY_SIZE_MAX;
+		struct GsPacket PacketOut = {};
+		size_t OffsetOut = 0;
+
+		if ((Packet->dataLength - Offset) % 2 != 0)
+			GS_ERR_CLEAN_J(nameget, 1);
+
+		IdNum = (Packet->dataLength - Offset) / 2;
+		GS_ALLOCA_ASSIGN(IdVec, gs_vserv_user_id_t, IdNum);
+
+		for (size_t i = 0; i < IdNum; i++)
+			IdVec[i] = gs_read_short(Packet->data + Offset + (2 * i));
+
+		/* (cmd)[1], ((id)[2], (namenum)[4] (namevec)[namenum])[..] */
+
+		if (!(OutBuf = (uint8_t *) malloc(LimitOut)))
+			GS_ERR_CLEAN_J(nameget, 1);
+
+		PacketOut.data = GS_ARGOWN(&OutBuf);
+		PacketOut.dataLength = LimitOut;
+
+		if (gs_packet_space(&PacketOut, (OffsetOut), 1 /*cmd*/))
+			GS_ERR_CLEAN_J(nameget, 1);
+
+		gs_write_byte(PacketOut.data + OffsetOut, GS_VSERV_CMD_NAMES);
+
+		OffsetOut += 1;
+
+		for (size_t i = 0; i < IdNum; i++) {
+			auto it = Ext->mUserIdAddr.find(IdVec[i]);
+			if (it == Ext->mUserIdAddr.end())
+				continue;
+			auto it2 = Ext->mUsers.find(it->second);
+			if (it2 == Ext->mUsers.end())
+				continue;
+			if (gs_packet_space(&PacketOut, (OffsetOut), 4 /*namenum*/ + it2->second->mLenName /*namevec*/))
+				break;
+			gs_write_uint(PacketOut.data + OffsetOut, it2->second->mLenName);
+			memcpy(PacketOut.data + OffsetOut + 4, it2->second->mNameBuf, it2->second->mLenName);
+			Offset += 4 + it2->second->mLenName;
+		}
+
+		/* adjust packet to real length (vs maximum allowed) */
+
+		PacketOut.dataLength = Offset;
+
+		/* respond */
+
+		if (!!(r = gs_vserv_enqueue_idvec(Respond, &PacketOut, &User->mId, 1, Ext->mUserIdAddr)))
+			GS_GOTO_CLEAN_J(nameget, 1);
+
+	clean_nameget:
 		if (!!r)
 			GS_GOTO_CLEAN();
 	}

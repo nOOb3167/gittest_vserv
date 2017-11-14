@@ -14,6 +14,7 @@
 
 // FIXME: should be declared somewhere else
 #define GS_ALLOCA_VAR(VARNAME, TT, NELT) TT *VARNAME = (TT *) alloca(sizeof (TT) * (NELT))
+#define GS_ALLOCA_ASSIGN(VARNAME, TT, NELT) (VARNAME) = ((TT *) alloca(sizeof (TT) * (NELT)))
 
 #define GS_ADDR_RAWHASH_BUCKET(RAWHASH, NUM_BUCKETS) ((RAWHASH) % (NUM_BUCKETS))
 
