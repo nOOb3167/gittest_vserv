@@ -243,57 +243,72 @@ int gs_record_stop(struct GsRecord *Record)
 	GS_NOALERR();
 }
 
-int gs_record_capture_drain(struct GsRecord *Record)
+int gs_record_capture_drain(
+	struct GsRecord *Record,
+	size_t FraSize,
+	size_t BlkNumFra,
+	char *ioBlkBuf, size_t BlkBufSize, size_t *oLenBlkBuf,
+	size_t *oNumBlkProcessed)
 {
 	int r = 0;
 
 	/*
 	* OpenAL alcGetIntegerv exposes the count of new samples arrived, but not yet delivered via alcCaptureSamples.
 	*   this count grows during an ongoing capture (ex started via alcCaptureStart).
-	* we want samples delivered in blocks of certain size (ex an Opus frame, see calculation of 'OpFraNumSamp').
+	* we want samples delivered in blocks of certain size.
+	*   (the size of an Opus frame, see calculation of 'OpBlkNumFra'.
+	*    note Opus frame is termed block in this function.
+	*    Opus supports only specific Opus frame sizes.
+	*    https://wiki.xiph.org/Opus_Recommended_Settings : Quote "Opus can encode frames of 2.5, 5, 10, 20, 40, or 60 ms.")
 	* if this function keeps getting called during an ongoing capture, alcGetIntegerv eventually will report enough samples to fill an Opus frame.
 	*   those samples are candidate for draining via alcCaptureSamples
 	*/
 
 	// FIXME: apply fix once opus becomes used
-	typedef ALshort should_be_opus_in16_tho;
+	typedef ALshort should_be_opus_int16_tho;
 
-	const size_t AlSampFraSize = sizeof(ALshort) /*AL_FORMAT_MONO16*/ * 1 /*numchannels*/;
-	const size_t OpSampFraSize = sizeof(should_be_opus_in16_tho) /*opus_encode API doc*/ * 1 /*numchannels*/;
-	const size_t OpFraNumSamp = (48000 / 1000) /*samples/msec*/ * 20 /*20ms (one frame)*/;
-	const size_t OpFraSize = OpFraNumSamp * OpSampFraSize;
-	assert(AlSampFraSize == OpSampFraSize);
+	/* Bl(oc)k: [Fra,..]   # one Opus frame worth of blocks
+	 * Fra(me): [Samp,..]  # one sample for every channel; 1 channel is hardcoded therefore 1 Sample
+	 * Samp(le): [INT16] # MONO16 format is hardcoded therefore sample is an opus_int16 aka ALshort
+	 *
+	 * property of a 1 channel frame being equivalent to a single sample will be used
+	 * (ex passing frame counts into OpenAL functions expecting sample counts) */
 
-	ALCint NumAvailSampFra = 0;
+	const size_t AlFraSize = sizeof(ALshort) /*AL_FORMAT_MONO16*/ * 1 /*numchannels*/;
+	const size_t OpFraSize = sizeof(should_be_opus_int16_tho) /*opus_encode API doc*/ * 1 /*numchannels*/;
+	GS_ASSERT(AlFraSize == OpFraSize);
+	const size_t OpBlkNumFra = (48000 / 1000) /*samples/msec*/ * 20 /*20ms (one Opus frame)*/;
+	const size_t OpBlkSize = OpBlkNumFra * OpFraSize;
+	GS_ASSERT(OpFraSize == FraSize);
+	GS_ASSERT(OpBlkNumFra == BlkNumFra);
 
-	if (Record->mBufferAvail.empty())
-		GS_ERR_NO_CLEAN(0);
+	size_t BlkNum = 0;
 
-	alcGetIntegerv(Record->mCapDevice, ALC_CAPTURE_SAMPLES, 1, &NumAvailSampFra);
+	ALCint NumAvailFra = 0;
+	size_t NumAvailBlk = 0;
+	size_t NumAvailBuf = 0;
+	size_t NumBlkToProcess = 0;
+
+	alcGetIntegerv(Record->mCapDevice, ALC_CAPTURE_SAMPLES, 1, &NumAvailFra);
 
 	GS_NOALERR();
 
-	while (NumAvailSampFra >= OpFraNumSamp && ! Record->mBufferAvail.empty()) {
-		std::string SampleFrame(OpFraSize, '\0');
+	NumAvailBlk = (NumAvailFra / OpBlkNumFra); /*truncating division*/
+	NumAvailBuf = (BlkBufSize / OpBlkSize);    /*truncating division*/
+	NumBlkToProcess = GS_MIN(NumAvailBuf, NumAvailBlk);
 
-		ALuint BufferForCapture = Record->mBufferAvail.back();
-		Record->mBufferAvail.pop_back();
+	if (NumBlkToProcess == 0)
+		GS_ERR_NO_CLEAN(0);
 
-		alcCaptureSamples(Record->mCapDevice, (void *) SampleFrame.data(), OpFraNumSamp);
-		GS_NOALERR();
-		NumAvailSampFra -= OpFraNumSamp;
+	alcCaptureSamples(Record->mCapDevice, ioBlkBuf, NumBlkToProcess * OpBlkNumFra);
 
-		// FIXME: add early preprocessing (ex volume adjustment)
-
-		alBufferData(BufferForCapture, AL_FORMAT_MONO16, SampleFrame.data(), SampleFrame.size(), 48000);
-
-		GS_NOALERR();
-	}
-
-	// somehow output the buffers captured
-	GS_ASSERT(0);
+	GS_NOALERR();
 
 noclean:
+	if (oLenBlkBuf)
+		*oLenBlkBuf = NumBlkToProcess * OpBlkSize;
+	if (oNumBlkProcessed)
+		*oNumBlkProcessed = NumBlkToProcess;
 
 clean:
 
