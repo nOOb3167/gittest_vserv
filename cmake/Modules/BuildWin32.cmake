@@ -2,6 +2,7 @@
 
 SET(GITTEST_PLAT_HEADERS_NIX
   include/gittest/vserv_net.h
+  include/gittest/vserv_clnt.h
   ${GITTEST_COMMON_HEADERS_NIX}
 )
 SET(GITTEST_PLAT_SOURCES_NIX
@@ -9,18 +10,22 @@ SET(GITTEST_PLAT_SOURCES_NIX
   src/vserv_enet.cpp
   src/vserv_net_main.cpp
   src/vserv_crank0.cpp
+  src/vserv_clnt_test.cpp
   ${GITTEST_COMMON_SOURCES_NIX}
 )
 
 # search for all needed packages
 
 FIND_PACKAGE(ENet REQUIRED)
+FIND_PACKAGE(OpenAL REQUIRED)
 
 SET(GITTEST_DEP_INCLUDE_DIRS
   ${ENET_INCLUDE_DIR}
+  ${OPENAL_INCLUDE_DIR}
 )
 SET (GITTEST_DEP_LIBRARIES
   ${ENET_LIBRARIES}
+  ${OPENAL_LIBRARY}
 )
 
 SET(GITTEST_SELFUP_INCLUDE_DIRS
