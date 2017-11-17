@@ -19,11 +19,19 @@ int gs_vserv_clnt_ctx_get(struct GsVServClnt *Clnt, struct GsVServClntCtx **oCtx
 int gs_vserv_clnt_receive(struct GsVServClnt *Clnt, struct GsVServClntAddress *ioAddrFrom, uint8_t *ioDataBuf, size_t DataSize, size_t *oLenData);
 int gs_vserv_clnt_send(struct GsVServClnt *Clnt, uint8_t *DataBuf, size_t LenData);
 
+int gs_vserv_clnt_setkeys(struct GsVServClnt *Clnt, uint32_t Keys);
+
 int gs_vserv_clnt_callback_create(struct GsVServClnt *Clnt);
 int gs_vserv_clnt_callback_destroy(struct GsVServClnt *Clnt);
-// some kind of timing argument? abstime or deltatime?
-// some kind of received-sound-frames-with-mode argument?
-int gs_vserv_clnt_callback_update(struct GsVServClnt *Clnt);
+int gs_vserv_clnt_callback_update_record(
+	struct GsVServClnt *Clnt,
+	long long TimeStamp,
+	uint8_t Mode,
+	uint16_t Blk,
+	uint8_t *FraBuf, size_t LenFra);
+int gs_vserv_clnt_callback_update_other(
+	struct GsVServClnt *Clnt,
+	long long TimeStamp);
 
 // pedantically version-define the header so it may be bundled into foreign source trees?
 //   version passed to create?

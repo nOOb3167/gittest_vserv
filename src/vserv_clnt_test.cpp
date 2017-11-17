@@ -1,5 +1,6 @@
 #include <cstdlib>
 
+#include <atomic>
 #include <thread>
 #include <chrono>
 #include <string>
@@ -24,6 +25,8 @@ typedef SOCKET socket_t;
 
 #define GS_RECORD_BUFFERS_NUM 8
 #define GS_RECORD_ARBITRARY_BUFFER_SAMPLES_NUM 48000
+
+#define GS_OPUS_FRAME_48KHZ_20MS_SAMP_NUM ((48000 / 1000) /*samples/msec*/ * 20 /*20ms (one Opus frame)*/)
 
 #define GS_NOALERR() do { GS_ASSERT(AL_NO_ERROR == alGetError()); } while(0)
 
@@ -247,7 +250,7 @@ int gs_record_capture_drain(
 	struct GsRecord *Record,
 	size_t SampSize,
 	size_t FraNumSamp,
-	char *ioFraBuf, size_t FraBufSize, size_t *oLenFraBuf,
+	uint8_t *ioFraBuf, size_t FraBufSize, size_t *oLenFraBuf,
 	size_t *oNumFraProcessed)
 {
 	int r = 0;
@@ -269,7 +272,7 @@ int gs_record_capture_drain(
 	const size_t AlSampSize = sizeof(ALshort); /*AL_FORMAT_MONO16*/
 	const size_t OpSampSize = sizeof(should_be_opus_int16_tho); /*opus_encode API doc*/
 	GS_ASSERT(AlSampSize == OpSampSize);
-	const size_t OpFraNumSamp = (48000 / 1000) /*samples/msec*/ * 20 /*20ms (one Opus frame)*/;
+	const size_t OpFraNumSamp = GS_OPUS_FRAME_48KHZ_20MS_SAMP_NUM;
 	const size_t OpFraSize = OpFraNumSamp * OpSampSize;
 	GS_ASSERT(OpFraNumSamp == FraNumSamp);
 
@@ -311,6 +314,7 @@ struct GsVServClnt
 	sp<std::thread> mThread;
 	struct GsVServClntAddress mAddr;
 	struct GsRecord *mRecord;
+	std::atomic<uint32_t> mKeys;
 };
 
 int gs_vserv_clnt_ctx_set(struct GsVServClnt *Clnt, struct GsVServClntCtx *Ctx)
@@ -354,17 +358,43 @@ clean:
 	return r;
 }
 
+int gs_vserv_clnt_setkeys(struct GsVServClnt *Clnt, uint32_t Keys)
+{
+	Clnt->mKeys.store(Keys);
+	return 0;
+}
+
 void threadfunc(struct GsVServClnt *Clnt)
 {
 	int r = 0;
 
+	std::chrono::high_resolution_clock Clock;
+
+	long long TimeStamp = 0;
+
 	while (true) {
-		char DataBuf[65535];
-		int LenData = 0;
-		struct GsVServClntAddress AddrRecv = {};
-		if (! Clnt->mSocket->WaitData(10))
+		size_t NumFraProcessed = 0;
+		// FIXME: hardcoded timeout (should be prorated wrt worktime)
+		if (! Clnt->mSocket->WaitData(20))
 			continue;
-		if (!!(r = gs_vserv_clnt_callback_update(Clnt)))
+		TimeStamp = std::chrono::duration_cast<std::chrono::milliseconds>(Clock.now().time_since_epoch()).count();
+		while (true) {
+			uint8_t FraBuf[GS_OPUS_FRAME_48KHZ_20MS_SAMP_NUM];
+			size_t LenFra = 0;
+			uint32_t Keys = 0;
+			uint8_t Mode = 0;
+			uint16_t Blk = 0;
+			if (!!(r = gs_record_capture_drain(Clnt->mRecord, sizeof(uint16_t), GS_OPUS_FRAME_48KHZ_20MS_SAMP_NUM, FraBuf, sizeof FraBuf, &LenFra, &NumFraProcessed)))
+				GS_GOTO_CLEAN();
+			if (NumFraProcessed == 0)
+				break;
+			Keys = Clnt->mKeys.load();
+			Mode = (Keys >> 0) & 0xFF;
+			Blk  = (Keys >> 8) & 0xFFFF;
+			if (!!(r = gs_vserv_clnt_callback_update_record(Clnt, TimeStamp, Mode, Blk, FraBuf, LenFra)))
+				GS_GOTO_CLEAN();
+		}
+		if (!!(r = gs_vserv_clnt_callback_update_other(Clnt, TimeStamp)))
 			GS_GOTO_CLEAN();
 	}
 
@@ -389,6 +419,7 @@ int stuff(int argc, char **argv)
 	Clnt->mSocket = sp<GsVServClnt>(new UDPSocket());
 	Clnt->mAddr = Addr;
 	Clnt->mRecord = NULL;
+	Clnt->mKeys.store(0);
 
 	if (!!(r = gs_record_create(&Clnt->mRecord)))
 		GS_GOTO_CLEAN();

@@ -29,6 +29,7 @@ enum GsVServCmd {
 
 enum GsVServGroupMode
 {
+	GS_VSERV_GROUP_MODE_NONE = 0,
 	GS_VSERV_GROUP_MODE_S = 's',
 };
 
