@@ -17,7 +17,7 @@ struct GsVServClntCtx;
 int gs_vserv_clnt_ctx_set(struct GsVServClnt *Clnt, struct GsVServClntCtx *Ctx);
 int gs_vserv_clnt_ctx_get(struct GsVServClnt *Clnt, struct GsVServClntCtx **oCtx);
 int gs_vserv_clnt_receive(struct GsVServClnt *Clnt, struct GsVServClntAddress *ioAddrFrom, uint8_t *ioDataBuf, size_t DataSize, size_t *oLenData);
-int gs_vserv_clnt_send(struct GsVServClnt *Clnt, uint8_t *DataBuf, size_t LenData);
+int gs_vserv_clnt_send(struct GsVServClnt *Clnt, const uint8_t *DataBuf, size_t LenData);
 
 int gs_vserv_clnt_setkeys(struct GsVServClnt *Clnt, uint32_t Keys);
 
@@ -27,6 +27,7 @@ int gs_vserv_clnt_callback_update_record(
 	struct GsVServClnt *Clnt,
 	long long TimeStamp,
 	uint8_t Mode,
+	uint16_t Id,
 	uint16_t Blk,
 	uint8_t *FraBuf, size_t LenFra);
 int gs_vserv_clnt_callback_update_other(

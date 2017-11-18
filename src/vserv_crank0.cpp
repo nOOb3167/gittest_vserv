@@ -12,6 +12,7 @@
 #include <gittest/vserv_net.h>
 
 #define GS_VSERV_USER_ID_INVALID 0xFFFF
+#define GS_VSERV_USER_ID_SERVFILL 0xFFFF
 
 #define GS_VSERV_NAMELEN_ARBITRARY_SIZE_MAX 1472
 
@@ -254,48 +255,6 @@ clean:
 	return r;
 }
 
-uint8_t gs_read_byte(uint8_t *Ptr)
-{
-	return Ptr[0];
-}
-
-uint16_t gs_read_short(uint8_t *Ptr)
-{
-	uint16_t r = 0;
-	r |= (Ptr[0] & 0xFF) << 0;
-	r |= (Ptr[1] & 0xFF) << 8;
-	return r;
-}
-
-uint32_t gs_read_uint(uint8_t *Ptr)
-{
-	uint32_t r = 0;
-	r |= (Ptr[0] & 0xFF) << 0;
-	r |= (Ptr[1] & 0xFF) << 8;
-	r |= (Ptr[2] & 0xFF) << 16;
-	r |= (Ptr[3] & 0xFF) << 24;
-	return r;
-}
-
-void gs_write_byte(uint8_t *Ptr, uint8_t Byte)
-{
-	Ptr[0] = Byte;
-}
-
-void gs_write_short(uint8_t *Ptr, uint16_t UShort)
-{
-	Ptr[0] = (UShort & 0xFF);
-	Ptr[1] = ((UShort >> 8) & 0xFF);
-}
-
-void gs_write_uint(uint8_t *Ptr, uint32_t UInt)
-{
-	Ptr[0] = (UInt & 0xFF);
-	Ptr[1] = ((UInt >> 8) & 0xFF);
-	Ptr[2] = ((UInt >> 16) & 0xFF);
-	Ptr[3] = ((UInt >> 24) & 0xFF);
-}
-
 int gs_vserv_crank0(struct GsVServCtlCb *Cb, struct GsPacket *Packet, struct GsAddr *Addr, struct GsVServRespond *Respond)
 {
 	int r = 0;
@@ -535,6 +494,20 @@ int gs_vserv_crank0(struct GsVServCtlCb *Cb, struct GsPacket *Packet, struct GsA
 		Id   = gs_read_short(Packet->data + Offset + 1);
 		Blk  = gs_read_short(Packet->data + Offset + 3);
 		Seq  = gs_read_short(Packet->data + Offset + 5);
+
+		/* allow client to send the packet with 'id' field value GS_VSERV_USER_ID_SERVFILL.
+		   upon receiving such 'id', substitute it with the client's actual id. */
+
+		if (Id == GS_VSERV_USER_ID_SERVFILL) {
+			gs_write_short(Packet->data + Offset + 1, User->mId);
+			Id = gs_read_short(Packet->data + Offset + 1);
+		}
+
+		/* the value of 'id' field is not really a choice anyway.
+		   it must be the client's actual id. either apriori(sic) or after the above fixup. */
+
+		if (Id != User->mId)
+			GS_ERR_CLEAN_J(groupmodemsg, 1);
 
 		Offset += 7; /* rest is data */
 

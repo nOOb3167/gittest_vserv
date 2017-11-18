@@ -22,6 +22,14 @@ typedef SOCKET socket_t;
 
 #include <gittest/misc.h>
 #include <gittest/vserv_clnt.h>
+#include <gittest/vserv_helpers.h>
+
+// FIXME:
+#define GS_VSERV_CMD_GROUP_MODE_MSG_FIXME 'm'
+#define GS_VSERV_GROUP_MODE_NONE_FIXME 0
+#define GS_VSERV_USER_ID_SERVFILL_FIXME 0xFFFF
+
+#define GS_CLNT_ARBITRARY_PACKET_MAX 4096 /* but mind IP layer fragmentation issues of UDP */
 
 #define GS_RECORD_BUFFERS_NUM 8
 #define GS_RECORD_ARBITRARY_BUFFER_SAMPLES_NUM 48000
@@ -114,16 +122,18 @@ public:
 	int Receive(GsVServClntAddress &Sender, void *Data, int Size) {
 		int r = 0;
 
-		if (! WaitData(10))
+		if (! WaitData(mTimeoutMs))
 			return -1;
 
 		struct sockaddr_in SockAddr = {};
 		int SockAddrLen = sizeof SockAddr;
 		int NRecv = 0;
 
-		if (SOCKET_ERROR == (NRecv = recvfrom(mHandle, (char *) Data, Size, 0, (struct sockaddr *) &SockAddr, &SockAddrLen)))
+		if (SOCKET_ERROR == (NRecv = recvfrom(mHandle, (char *) Data, Size, MSG_TRUNC, (struct sockaddr *) &SockAddr, &SockAddrLen)))
 			GS_ERR_CLEAN(1);
 		if (SockAddrLen != sizeof SockAddr)
+			GS_ERR_CLEAN(1);
+		if (NRecv > Size)  // MSG_TRUNC effect for too-long datagrams
 			GS_ERR_CLEAN(1);
 
 		Sender.mSinFamily = SockAddr.sin_family;
@@ -307,6 +317,12 @@ clean:
 	return r;
 }
 
+struct GsVServClntCtx
+{
+	int16_t mBlk;
+	int16_t mSeq;
+};
+
 struct GsVServClnt
 {
 	struct GsVServClntCtx *mCtx;
@@ -364,6 +380,116 @@ int gs_vserv_clnt_setkeys(struct GsVServClnt *Clnt, uint32_t Keys)
 	return 0;
 }
 
+int gs_vserv_clnt_callback_create(struct GsVServClnt *Clnt)
+{
+	int r = 0;
+
+	struct GsVServClntCtx *Ctx = new GsVServClntCtx();
+	Ctx->mBlk = 0;
+	Ctx->mSeq = 0;
+
+	if (!!(r = gs_vserv_clnt_ctx_set(Clnt, Ctx)))
+		GS_GOTO_CLEAN();
+
+clean:
+
+	return r;
+}
+
+int gs_vserv_clnt_callback_destroy(struct GsVServClnt *Clnt)
+{
+	int r = 0;
+
+	struct GsVServClntCtx *Ctx = NULL;
+
+	if (!!(r = gs_vserv_clnt_ctx_get(Clnt, &Ctx)))
+		GS_GOTO_CLEAN();
+
+	// FIXME: release ctx
+	GS_ASSERT(0);
+
+clean:
+
+	return r;
+}
+
+int gs_vserv_clnt_callback_update_record(
+	struct GsVServClnt *Clnt,
+	long long TimeStamp,
+	uint8_t Mode,
+	uint16_t Id,
+	uint16_t Blk,
+	uint8_t *FraBuf, size_t LenFra)
+{
+	int r = 0;
+
+	/* (cmd)[1], (mode)[1], (id)[2], (blk)[2], (seq)[2], (data)[...] */
+
+	struct GsVServClntCtx *Ctx = NULL;
+
+	GS_ALLOCA_VAR(OutBuf, uint8_t, GS_CLNT_ARBITRARY_PACKET_MAX);
+
+	struct GsPacket PacketOut = { OutBuf, GS_CLNT_ARBITRARY_PACKET_MAX };
+
+	if (!!(r = gs_vserv_clnt_ctx_get(Clnt, &Ctx)))
+		GS_GOTO_CLEAN();
+
+	/* no mode - no send requested */
+	if (Mode == GS_VSERV_GROUP_MODE_NONE_FIXME)
+		GS_ERR_NO_CLEAN(0);
+
+	/* fresh blk? use it (also resetting seq) */
+	if (Ctx->mBlk != Blk) {
+		Ctx->mBlk = Blk;
+		Ctx->mSeq = 0;
+	}
+
+	if (gs_packet_space(&PacketOut, 0, 1 /*cmd*/ + 1 /*mode*/ + 2 /*id*/ + 2 /*blk*/ + 2 /*seq*/ + LenFra /*data*/))
+		GS_ERR_CLEAN(1);
+
+	gs_write_byte(PacketOut.data + 0, GS_VSERV_CMD_GROUP_MODE_MSG_FIXME);
+	gs_write_byte(PacketOut.data + 1, Mode);
+	gs_write_short(PacketOut.data + 2, Id);
+	gs_write_short(PacketOut.data + 4, Ctx->mBlk);
+	gs_write_short(PacketOut.data + 6, Ctx->mSeq);
+	memcpy(PacketOut.data + 8, FraBuf, LenFra);
+
+	/* update packet with final length */
+
+	PacketOut.dataLength = 8 + LenFra;
+
+	if (!!(r = gs_vserv_clnt_send(Clnt, PacketOut.data, PacketOut.dataLength)))
+		GS_GOTO_CLEAN();
+
+noclean:
+
+clean:
+
+	return r;
+}
+
+int gs_vserv_clnt_callback_update_other(
+	struct GsVServClnt *Clnt,
+	long long TimeStamp)
+{
+	int r = 0;
+
+	struct GsVServClntAddress Addr = {};
+
+	GS_ALLOCA_VAR(DataBuf, uint8_t, GS_CLNT_ARBITRARY_PACKET_MAX);
+	size_t DataSize = GS_CLNT_ARBITRARY_PACKET_MAX;
+	size_t LenData = 0;
+
+	/* -1 return code aliasing error and lack-of-progress conditions.. nice api minetest */
+	while (-1 != (LenData = Clnt->mSocket->Receive(Addr, DataBuf, DataSize))) {
+		GS_LOG(I, S, "gs_vserv_clnt_callback_update_other receive");
+	}
+
+clean:
+
+	return r;
+}
+
 void threadfunc(struct GsVServClnt *Clnt)
 {
 	int r = 0;
@@ -391,7 +517,7 @@ void threadfunc(struct GsVServClnt *Clnt)
 			Keys = Clnt->mKeys.load();
 			Mode = (Keys >> 0) & 0xFF;
 			Blk  = (Keys >> 8) & 0xFFFF;
-			if (!!(r = gs_vserv_clnt_callback_update_record(Clnt, TimeStamp, Mode, Blk, FraBuf, LenFra)))
+			if (!!(r = gs_vserv_clnt_callback_update_record(Clnt, TimeStamp, Mode, GS_VSERV_USER_ID_SERVFILL_FIXME, Blk, FraBuf, LenFra)))
 				GS_GOTO_CLEAN();
 		}
 		if (!!(r = gs_vserv_clnt_callback_update_other(Clnt, TimeStamp)))

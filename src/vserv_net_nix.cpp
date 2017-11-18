@@ -185,26 +185,6 @@ int gs_vserv_lock_release(struct GsVServLock *Lock)
 	return 0;
 }
 
-/** needs to be destructible by regular free(2) (ex gs_vserv_write_elt_del_sp_free) */
-int gs_packet_copy_create(struct GsPacket *Packet, uint8_t **oABuf, size_t *oLenA)
-{
-	uint8_t *ABuf = NULL;
-	size_t LenA = Packet->dataLength;
-	if (!(ABuf = (uint8_t *)malloc(LenA)))
-		return 1;
-	memcpy(ABuf, Packet->data, Packet->dataLength);
-	if (oABuf)
-		*oABuf = ABuf;
-	if (oLenA)
-		*oLenA = LenA;
-	return 0;
-}
-
-int gs_packet_space(struct GsPacket *Packet, size_t Offset, size_t SpaceRequired)
-{
-	return Offset + SpaceRequired > Packet->dataLength;
-}
-
 size_t gs_addr_rawhash(struct GsAddr *Addr)
 {
 	return gs_addr_hash_t()(*Addr);

@@ -11,10 +11,7 @@
 #endif
 
 #include <gittest/config.h>
-
-// FIXME: should be declared somewhere else
-#define GS_ALLOCA_VAR(VARNAME, TT, NELT) TT *VARNAME = (TT *) alloca(sizeof (TT) * (NELT))
-#define GS_ALLOCA_ASSIGN(VARNAME, TT, NELT) (VARNAME) = ((TT *) alloca(sizeof (TT) * (NELT)))
+#include <gittest/vserv_helpers.h>
 
 #define GS_ADDR_RAWHASH_BUCKET(RAWHASH, NUM_BUCKETS) ((RAWHASH) % (NUM_BUCKETS))
 
@@ -52,12 +49,6 @@ enum GsSockType
 	GS_SOCK_TYPE_WAKE = 4,
 };
 
-struct GsPacket
-{
-	uint8_t *data;
-	size_t   dataLength;
-};
-
 struct GsVServCtlCb
 {
 	int(*CbCrank)(struct GsVServCtlCb *Cb, struct GsPacket *Packet, struct GsAddr *Addr, struct GsVServRespond *Respond);
@@ -69,9 +60,6 @@ int gs_vserv_lock_destroy(struct GsVServLock *Lock);
 int gs_vserv_lock_lock(struct GsVServLock *Lock);
 int gs_vserv_lock_unlock(struct GsVServLock *Lock);
 int gs_vserv_lock_release(struct GsVServLock *Lock);
-
-int gs_packet_copy_create(struct GsPacket *Packet, uint8_t **oABuf, size_t *oLenA);
-int gs_packet_space(struct GsPacket *Packet, size_t Offset, size_t SpaceRequired);
 
 size_t gs_addr_rawhash(struct GsAddr *Addr);
 size_t gs_addr_port(struct GsAddr *Addr);
