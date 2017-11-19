@@ -4,12 +4,17 @@
 #include <stddef.h>
 #include <stdint.h>
 
-struct GsVServClntAddress
-{
-	unsigned long long mSinFamily;
-	unsigned long long mSinPort; /* host byte order */
-	unsigned long long mSinAddr; /* host byte order */
-};
+#include <gittest/UDPSocket.hpp>
+
+// FIXME:
+#define GS_VSERV_CMD_IDENT_FIXME 'i'
+#define GS_VSERV_CMD_IDENT_ACK_FIXME 'I'
+#define GS_VSERV_CMD_GROUP_MODE_MSG_FIXME 'm'
+#define GS_VSERV_GROUP_MODE_NONE_FIXME 0
+#define GS_VSERV_USER_ID_SERVFILL_FIXME 0xFFFF
+
+#define GS_CLNT_ARBITRARY_PACKET_MAX 4096 /* but mind IP layer fragmentation issues of UDP */
+#define GS_CLNT_ARBITRARY_IDENT_RESEND_TIMEOUT 100
 
 struct GsVServClnt;
 struct GsVServClntCtx;
@@ -18,7 +23,7 @@ int gs_vserv_clnt_ctx_set(struct GsVServClnt *Clnt, struct GsVServClntCtx *Ctx);
 int gs_vserv_clnt_ctx_get(struct GsVServClnt *Clnt, struct GsVServClntCtx **oCtx);
 int gs_vserv_clnt_receive(struct GsVServClnt *Clnt, struct GsVServClntAddress *ioAddrFrom, uint8_t *ioDataBuf, size_t DataSize, size_t *oLenData);
 int gs_vserv_clnt_send(struct GsVServClnt *Clnt, const uint8_t *DataBuf, size_t LenData);
-int gs_vserv_clnt_random_uint(struct GsVServClnt, uint32_t *oRand);
+int gs_vserv_clnt_random_uint(struct GsVServClnt *Clnt, uint32_t *oRand);
 
 int gs_vserv_clnt_setkeys(struct GsVServClnt *Clnt, uint32_t Keys);
 
