@@ -34,11 +34,79 @@ struct GsVServClntCtx
 	struct GsRenamer mRenamer;
 };
 
+static bool gs_renamer_is_wanted(struct GsRenamer *Renamer);
+static int gs_renamer_ident_emit(struct GsRenamer *Renamer, struct GsPacket *ioPacket);
+int gs_renamer_update(struct GsRenamer *Renamer, struct GsVServClnt *Clnt, long long TimeStamp);
 static int gs_vserv_clnt_crank0(
 	struct GsVServClnt *Clnt,
 	struct GsVServClntCtx *Ctx,
 	long long TimeStamp,
 	struct GsPacket *Packet);
+
+bool gs_renamer_is_wanted(struct GsRenamer *Renamer)
+{
+	GS_ASSERT(Renamer->mNameWant.empty() == Renamer->mServWant.empty());
+	return ! Renamer->mNameWant.empty() && ! Renamer->mServWant.empty();
+}
+
+int gs_renamer_ident_emit(struct GsRenamer *Renamer, struct GsPacket *ioPacket)
+{
+	int r = 0;
+
+	GS_ASSERT(gs_renamer_is_wanted(Renamer));
+
+	if (gs_packet_space(ioPacket, 0, 1 /*cmd*/ + 4 /*rand*/ + 4 /*lenname*/ + 4 /*lenserv*/ + Renamer->mNameWant.size() /*name*/ + Renamer->mServWant.size() /*serv*/))
+		GS_ERR_CLEAN(1);
+
+	gs_write_byte(ioPacket->data + 0, GS_VSERV_CMD_IDENT_FIXME);
+	gs_write_uint(ioPacket->data + 1, Renamer->mRandLastRequested);
+	gs_write_uint(ioPacket->data + 5, Renamer->mNameWant.size());
+	gs_write_uint(ioPacket->data + 9, Renamer->mServWant.size());
+	memcpy(ioPacket->data + 13 + 0                        , Renamer->mNameWant.data(), Renamer->mNameWant.size());
+	memcpy(ioPacket->data + 13 + Renamer->mNameWant.size(), Renamer->mServWant.data(), Renamer->mServWant.size());
+
+	/* update packet with final length */
+
+	ioPacket->dataLength = 13 + Renamer->mNameWant.size() + Renamer->mServWant.size();
+
+clean:
+
+	return r;
+}
+
+int gs_renamer_update(struct GsRenamer *Renamer, struct GsVServClnt *Clnt, long long TimeStamp)
+{
+	int r = 0;
+
+	GS_ALLOCA_VAR(OutBuf, uint8_t, GS_CLNT_ARBITRARY_PACKET_MAX);
+	struct GsPacket Packet = { OutBuf, GS_CLNT_ARBITRARY_PACKET_MAX };
+
+	/* no update work needed at all */
+
+	if (gs_renamer_is_wanted(Renamer))
+		GS_ERR_NO_CLEAN(0);
+
+	/* update work needed - but not yet */
+
+	if (Renamer->mTimeStampLastRequested + GS_CLNT_ARBITRARY_IDENT_RESEND_TIMEOUT < TimeStamp)
+		GS_ERR_NO_CLEAN(0);
+
+	/* update work - send / resent the ident message */
+
+	if (!!(r = gs_renamer_ident_emit(Renamer, &Packet)))
+		GS_GOTO_CLEAN();
+
+	if (!!(r = gs_vserv_clnt_send(Clnt, Packet.data, Packet.dataLength)))
+		GS_GOTO_CLEAN();
+
+	Renamer->mTimeStampLastRequested = TimeStamp;
+
+noclean:
+
+clean:
+
+	return r;
+}
 
 int gs_vserv_clnt_crank0(
 	struct GsVServClnt *Clnt,
@@ -68,7 +136,7 @@ int gs_vserv_clnt_crank0(
 
 		/* unsolicited or reliability-codepath (ex re-sent or reordered packet) GS_VSERV_CMD_IDENT_ACK */
 
-		if (! (Ctx->mRenamer.mNameWant.size() && Ctx->mRenamer.mServWant.size()))
+		if (! gs_renamer_is_wanted(&Ctx->mRenamer))
 			GS_ERR_NO_CLEAN_J(ident_ack, 0);
 		if (Rand != Ctx->mRenamer.mRandLastRequested)
 			GS_ERR_NO_CLEAN_J(ident_ack, 0);
@@ -78,6 +146,11 @@ int gs_vserv_clnt_crank0(
 		Ctx->mName.mName = Ctx->mRenamer.mNameWant;
 		Ctx->mName.mServ = Ctx->mRenamer.mServWant;
 		Ctx->mName.mId = Id;
+
+		/* reset renamer */
+
+		Ctx->mRenamer.mNameWant.clear();
+		Ctx->mRenamer.mServWant.clear();
 
 	noclean_ident_ack:
 
@@ -151,30 +224,16 @@ int gs_vserv_clnt_callback_ident(
 	if (!!(r = gs_vserv_clnt_ctx_get(Clnt, &Ctx)))
 		GS_GOTO_CLEAN();
 
-	/* setup for resends if needed */
-
 	if (!!(r = gs_vserv_clnt_random_uint(Clnt, &FreshRand)))
 		GS_GOTO_CLEAN();
 
 	Renamer.mNameWant = std::string(NameWantedBuf, LenNameWanted);
+	Renamer.mServWant = std::string(ServWantedBuf, LenServWanted);
 	Renamer.mRandLastRequested = FreshRand;
 	Renamer.mTimeStampLastRequested = TimeStamp;
 
-	/* emit ident */
-
-	if (gs_packet_space(&PacketOut, 0, 1 /*cmd*/ + 4 /*rand*/ + 4 /*lenname*/ + 4 /*lenserv*/ + LenNameWanted /*name*/ + LenServWanted /*serv*/))
-		GS_ERR_CLEAN(1);
-
-	gs_write_byte(OutBuf + 0, GS_VSERV_CMD_IDENT_FIXME);
-	gs_write_uint(OutBuf + 1, Renamer.mRandLastRequested);
-	gs_write_uint(OutBuf + 5, LenNameWanted);
-	gs_write_uint(OutBuf + 9, LenServWanted);
-	memcpy(OutBuf + 13 + 0            , NameWantedBuf, LenNameWanted);
-	memcpy(OutBuf + 13 + LenNameWanted, ServWantedBuf, LenServWanted);
-
-	/* update packet with final length */
-
-	PacketOut.dataLength = 13 + LenNameWanted + LenServWanted;
+	if (!!(r = gs_renamer_ident_emit(&Renamer, &PacketOut)))
+		GS_GOTO_CLEAN();
 
 	if (!!(r = gs_vserv_clnt_send(Clnt, PacketOut.data, PacketOut.dataLength)))
 		GS_GOTO_CLEAN();
@@ -249,10 +308,7 @@ int gs_vserv_clnt_callback_update_other(
 
 	struct GsVServClntCtx *Ctx = NULL;
 
-	struct GsPacket PacketOut = {};
 	struct GsVServClntAddress Addr = {};
-
-	GS_ALLOCA_VAR(OutBuf, uint8_t, GS_CLNT_ARBITRARY_PACKET_MAX);
 
 	GS_ALLOCA_VAR(DataBuf, uint8_t, GS_CLNT_ARBITRARY_PACKET_MAX);
 	size_t DataSize = GS_CLNT_ARBITRARY_PACKET_MAX;
@@ -260,32 +316,8 @@ int gs_vserv_clnt_callback_update_other(
 	if (!!(r = gs_vserv_clnt_ctx_get(Clnt, &Ctx)))
 		GS_GOTO_CLEAN();
 
-	if (Ctx->mRenamer.mNameWant.size() && Ctx->mRenamer.mServWant.size()) {
-		if (Ctx->mRenamer.mTimeStampLastRequested + GS_CLNT_ARBITRARY_IDENT_RESEND_TIMEOUT > TimeStamp) {
-			const struct GsRenamer &Renamer = Ctx->mRenamer;
-
-			/* emit ident */
-
-			if (gs_packet_space(&PacketOut, 0, 1 /*cmd*/ + 4 /*rand*/ + 4 /*lenname*/ + 4 /*lenserv*/ + Renamer.mNameWant.size() /*name*/ + Renamer.mServWant.size() /*serv*/))
-				GS_ERR_CLEAN(1);
-
-			gs_write_byte(OutBuf + 0, GS_VSERV_CMD_IDENT_FIXME);
-			gs_write_uint(OutBuf + 1, Renamer.mRandLastRequested);
-			gs_write_uint(OutBuf + 5, Renamer.mNameWant.size());
-			gs_write_uint(OutBuf + 9, Renamer.mServWant.size());
-			memcpy(OutBuf + 13 + 0, Renamer.mNameWant.data(), Renamer.mNameWant.size());
-			memcpy(OutBuf + 13 + Renamer.mNameWant.size(), Renamer.mServWant.data(), Renamer.mServWant.size());
-
-			/* update packet with final length */
-
-			PacketOut.dataLength = 13 + Renamer.mNameWant.size() + Renamer.mServWant.size();
-
-			if (!!(r = gs_vserv_clnt_send(Clnt, PacketOut.data, PacketOut.dataLength)))
-				GS_GOTO_CLEAN();
-
-			Ctx->mRenamer.mTimeStampLastRequested = TimeStamp;
-		}
-	}
+	if (!!(r = gs_renamer_update(&Ctx->mRenamer, Clnt, TimeStamp)))
+		GS_GOTO_CLEAN();
 
 	while (true) {
 		struct GsPacket Packet = { DataBuf, DataSize }; /*notowned*/
