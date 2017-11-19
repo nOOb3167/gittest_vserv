@@ -24,6 +24,7 @@ enum GsVServCmd {
 	GS_VSERV_M_CMD_GROUPSET = 's',
 	GS_VSERV_CMD_GROUP_MODE_MSG = 'm',
 	GS_VSERV_CMD_IDENT = 'i',
+	GS_VSERV_CMD_IDENT_ACK = 'I',
 	GS_VSERV_CMD_NAMEGET = 'n',
 	GS_VSERV_CMD_NAMES = 'N',
 };
@@ -291,23 +292,28 @@ int gs_vserv_crank0(struct GsVServCtlCb *Cb, struct GsPacket *Packet, struct GsA
 
 	case GS_VSERV_CMD_IDENT:
 	{
-		/* (cmd)[1], (lenname)[4], (lenserv)[4], (name)[lenname], (serv)[lenserv] */
+		/* (cmd)[1], (rand)[4], (lenname)[4], (lenserv)[4], (name)[lenname], (serv)[lenserv] */
 
 		struct GsVServUser *UserN = NULL;
 
 		size_t Offset = 0;
+		uint32_t Rand = 0;
 		uint32_t LenName = 0;
 		uint32_t LenServ = 0;
 		uint8_t *NameBuf = NULL;
 		uint8_t *ServBuf = NULL;
 
-		if (gs_packet_space(Packet, (Offset += 1), 4 /*lenname*/ + 4 /*lenserv*/))
+		uint8_t IdentAckBuf[7] = {};
+		struct GsPacket PacketOut = { IdentAckBuf, 7 };
+
+		if (gs_packet_space(Packet, (Offset += 1), 4 /*rand*/ + 4 /*lenname*/ + 4 /*lenserv*/))
 			GS_ERR_CLEAN_J(ident, 1);
 
-		LenName = gs_read_uint(Packet->data + Offset);
-		LenServ = gs_read_uint(Packet->data + Offset + 4);
+		Rand    = gs_read_uint(Packet->data + Offset + 0);
+		LenName = gs_read_uint(Packet->data + Offset + 4);
+		LenServ = gs_read_uint(Packet->data + Offset + 8);
 
-		if (gs_packet_space(Packet, (Offset += 8), LenName + LenServ))
+		if (gs_packet_space(Packet, (Offset += 12), LenName + LenServ))
 			GS_ERR_CLEAN_J(ident, 1);
 
 		if (!(NameBuf = (uint8_t *)malloc(LenName)))
@@ -328,6 +334,18 @@ int gs_vserv_crank0(struct GsVServCtlCb *Cb, struct GsPacket *Packet, struct GsA
 
 		// FIXME: state mutation
 		Ext->mUsers[*Addr] = sp<GsVServUser>(GS_ARGOWN(&UserN), gs_vserv_user_destroy);
+
+		/* (cmd)[1], (rand)[4], (id)[2] */
+
+		if (gs_packet_space(Packet, 0, 1 /*cmd*/ + 4 /*rand*/ + 2 /*id*/))
+			GS_GOTO_CLEAN_J(ident);
+
+		gs_write_byte(IdentAckBuf + 0, GS_VSERV_CMD_IDENT_ACK);
+		gs_write_uint(IdentAckBuf + 1, Rand);
+		gs_write_uint(IdentAckBuf + 5, User->mId);
+
+		if (!!(r = gs_vserv_enqueue_idvec(Respond, &PacketOut, &User->mId, 1, Ext->mUserIdAddr)))
+			GS_GOTO_CLEAN_J(ident);
 
 	clean_ident:
 		if (!!r)
