@@ -4,6 +4,10 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#define GS_48KHZ 48000
+
+#define GS_NOALERR() do { GS_ASSERT(AL_NO_ERROR == alGetError()); } while(0)
+
 #define GS_ALLOCA_VAR(VARNAME, TT, NELT) TT *VARNAME = (TT *) alloca(sizeof (TT) * (NELT))
 #define GS_ALLOCA_ASSIGN(VARNAME, TT, NELT) (VARNAME) = ((TT *) alloca(sizeof (TT) * (NELT)))
 

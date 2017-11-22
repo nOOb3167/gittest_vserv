@@ -123,6 +123,8 @@ int gs_vserv_clnt_crank0(
 
 	case GS_VSERV_CMD_IDENT_ACK_FIXME:
 	{
+		/* (cmd)[1], (rand)[4], (id)[2] */
+
 		size_t Offset = 0;
 
 		uint32_t Rand = 0;
@@ -155,6 +157,35 @@ int gs_vserv_clnt_crank0(
 	noclean_ident_ack:
 
 	clean_ident_ack:
+		if (!!r)
+			GS_GOTO_CLEAN();
+	}
+	break;
+
+	case GS_VSERV_CMD_GROUP_MODE_MSG_FIXME:
+	{
+		/* (cmd)[1], (mode)[1], (id)[2], (blk)[2], (seq)[2], (data)[...] */
+
+		size_t Offset = 0;
+
+		uint8_t Mode = 0;
+		uint16_t Id = 0;
+		uint16_t Blk = 0;
+		uint16_t Seq = 0;
+
+		if (gs_packet_space(Packet, (Offset += 1), 1 /*mode*/ + 2 /*id*/ + 2 /*blk*/ + 2 /*seq*/))
+			GS_ERR_CLEAN_J(groupmodemsg, 1);
+
+		Mode = gs_read_byte(Packet->data + Offset);
+		Id = gs_read_short(Packet->data + Offset + 1);
+		Blk = gs_read_short(Packet->data + Offset + 3);
+		Seq = gs_read_short(Packet->data + Offset + 5);
+
+		// FIXME: hmmm but SERVFILL_FIXME is actually a valid uint16_t value / id ?
+		//   prevent generating those (fix ex gs_vserv_user_genid)
+		GS_ASSERT(Id != GS_VSERV_USER_ID_SERVFILL_FIXME);
+
+	clean_groupmodemsg:
 		if (!!r)
 			GS_GOTO_CLEAN();
 	}

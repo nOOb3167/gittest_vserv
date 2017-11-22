@@ -13,8 +13,6 @@
 
 #define GS_OPUS_FRAME_48KHZ_20MS_SAMP_NUM ((48000 / 1000) /*samples/msec*/ * 20 /*20ms (one Opus frame)*/)
 
-#define GS_NOALERR() do { GS_ASSERT(AL_NO_ERROR == alGetError()); } while(0)
-
 struct GsRecord
 {
 	ALCdevice *mCapDevice;

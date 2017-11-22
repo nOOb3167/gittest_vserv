@@ -6,6 +6,7 @@
 #include <AL/alc.h>
 
 #include <gittest/misc.h>
+#include <gittest/vserv_helpers.h>
 #include <gittest/vserv_record.h>
 
 int gs_record_create(struct GsRecord **oRecord)
@@ -25,7 +26,7 @@ int gs_record_create(struct GsRecord **oRecord)
 
 	GS_ASSERT(alcGetCurrentContext() != NULL);
 
-	if (!(CapDevice = alcCaptureOpenDevice(NULL, 48000, AL_FORMAT_MONO16, GS_RECORD_ARBITRARY_BUFFER_SAMPLES_NUM)))
+	if (!(CapDevice = alcCaptureOpenDevice(NULL, GS_48KHZ, AL_FORMAT_MONO16, GS_RECORD_ARBITRARY_BUFFER_SAMPLES_NUM)))
 		GS_GOTO_CLEAN();
 
 	GS_NOALERR();
