@@ -412,19 +412,56 @@ clean:
 	return r;
 }
 
-int gs_playback_affinity_flow_liveness(struct GsPlayBack *PlayBack, const struct GsPlayBackFlowKey *Key, int *oAlive)
+int gs_playback_affinity_flow_liveness(
+	struct GsPlayBack *PlayBack,
+	long long TimeStamp,
+	const struct GsPlayBackFlowKey *Key,
+	int *oAlive)
 {
 	int r = 0;
 
-	// FIXME: maybe something wrt rbegin() element vs mSeqNext
-	//          ie we processed all sound packets received so far
-	//        probably need to check against TimeStamp though?
-	// FIXME: maybe just check if flow exists and let the processing routines
-	//        (already computing wrt TimeStamp/SeqNext) erase a flow on expiry
+	size_t Alive = 0;
 
-	GS_ASSERT(0);
+	auto itFlow = PlayBack->mMapFlow.find(*Key);
 
-	*oAlive = 0;
+	do {
+		/* cant be alive if it aint there */
+		if (itFlow == PlayBack->mMapFlow.end())
+			{ Alive = 0; break; }
+		const long long FlowPlayBackStartTime = itFlow->second.mTimeStampFirstReceipt + GS_PLAYBACK_FLOW_DELAY_MS;
+		/* cant be dead it if it aint ever even given a chance to get goin */
+		if (TimeStamp < FlowPlayBackStartTime)
+			{ Alive = 1; break; }
+		const uint16_t SeqCurrentTime = (TimeStamp - FlowPlayBackStartTime) / GS_OPUS_FRAME_DURATION_20MS;
+		const auto itLastReceived = itFlow->second.mMapBuf.rbegin();
+		/* check if the flow expired (ie we postulate further packets will either not arrive,
+		   or arrive and be too late (ex if we're past 5s into playing a flow and receive a packet
+		   carrying data from 1 to 1.050s it is too late to play).
+		   
+		   currently the code count a flow as expired if:
+		     - we are (time-wise) sufficiently past the last arrived/received packet in the flow
+			 - or, should none have arrived, we are sufficiently past the playback start time of that flow
+		   sufficiently behind meaning GS_PLAYBACK_FLOW_DELAY_EXPIRY_MS or more msec of delay */
+		long long ExpiryComparisonStartTime = 0;
+		if (itLastReceived != itFlow->second.mMapBuf.rend()) {
+			const uint16_t  SeqLastReceived  = itLastReceived->first;
+			const long long LastReceivedTime = SeqLastReceived * GS_OPUS_FRAME_DURATION_20MS;
+			ExpiryComparisonStartTime = LastReceivedTime;
+		}
+		else {
+			ExpiryComparisonStartTime = FlowPlayBackStartTime;
+		}
+		ExpiryComparisonStartTime += GS_PLAYBACK_FLOW_DELAY_EXPIRY_MS;
+		if (ExpiryComparisonStartTime < TimeStamp)
+			{ Alive = 0; break; }
+		/* all liveness checks passed, the flow is alive */
+		Alive = 1;
+	} while (0);
+
+noclean:
+
+	if (oAlive)
+		*oAlive = Alive;
 
 clean:
 
