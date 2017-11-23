@@ -3,8 +3,6 @@
 
 #include <stdint.h>
 
-#include <deque>
-
 #include <AL/al.h>
 #include <AL/alc.h>
 
@@ -16,9 +14,6 @@
 struct GsRecord
 {
 	ALCdevice *mCapDevice;
-	ALuint mSource;
-	ALuint *mBufferVec; size_t mBufferNum;
-	std::deque<ALuint> mBufferAvail;
 };
 
 int gs_record_create(struct GsRecord **oRecord);

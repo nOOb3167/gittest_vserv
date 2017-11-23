@@ -1,7 +1,5 @@
 #include <cstddef>
 
-#include <deque>
-
 #include <AL/al.h>
 #include <AL/alc.h>
 
@@ -16,13 +14,6 @@ int gs_record_create(struct GsRecord **oRecord)
 	struct GsRecord *Record = NULL;
 
 	ALCdevice *CapDevice = NULL;
-	ALuint Source = -1;
-	ALuint *BufferVec = NULL;
-	ALuint BufferNum = GS_RECORD_BUFFERS_NUM;
-	std::deque<ALuint> BufferAvail;
-
-	if (!(BufferVec = new ALuint[BufferNum]))
-		GS_ERR_CLEAN(1);
 
 	GS_ASSERT(alcGetCurrentContext() != NULL);
 
@@ -31,26 +22,17 @@ int gs_record_create(struct GsRecord **oRecord)
 
 	GS_NOALERR();
 
-	alGenSources(1, &Source);
-	alGenBuffers(BufferNum, BufferVec);
-
-	for (size_t i = 0; i < BufferNum; i++)
-		BufferAvail.push_back(BufferVec[i]);
-
-	GS_NOALERR();
-
 	Record = new GsRecord();
 	Record->mCapDevice = GS_ARGOWN(&CapDevice);
-	Record->mSource = Source;
-	Record->mBufferVec = GS_ARGOWN(&BufferVec); Record->mBufferNum = BufferNum;
-	Record->mBufferAvail = BufferAvail;
 
 	if (oRecord)
 		*oRecord = GS_ARGOWN(&Record);
 
 clean:
-	GS_DELETE(&Record, struct GsRecord);
-	GS_DELETE_ARRAY(&BufferVec, ALuint);
+	if (CapDevice)
+		if (! alcCaptureCloseDevice(CapDevice))
+			GS_ASSERT(0);
+	GS_DELETE_F(&Record, gs_record_destroy);
 
 	return r;
 }
@@ -58,6 +40,9 @@ clean:
 int gs_record_destroy(struct GsRecord *Record)
 {
 	if (Record) {
+		if (Record->mCapDevice)
+			if (! alcCaptureCloseDevice(Record->mCapDevice))
+				GS_ASSERT(0);
 		GS_DELETE(&Record, struct GsRecord);
 	}
 	return 0;
