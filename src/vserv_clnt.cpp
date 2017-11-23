@@ -3,12 +3,15 @@
 #include <cstring>
 
 #include <string>
+#include <set>
 #include <random>
 
 #include <gittest/misc.h>
 #include <gittest/vserv_net.h>
-#include <gittest/vserv_clnt.h>
 #include <gittest/vserv_helpers.h>
+#include <gittest/vserv_record.h>
+#include <gittest/vserv_playback.h>
+#include <gittest/vserv_clnt.h>
 
 struct GsName
 {
@@ -32,6 +35,8 @@ struct GsVServClntCtx
 
 	struct GsName mName;
 	struct GsRenamer mRenamer;
+	struct GsRecord   *mRecord;
+	struct GsPlayBack *mPlayBack;
 };
 
 static bool gs_renamer_is_wanted(struct GsRenamer *Renamer);
@@ -173,6 +178,8 @@ int gs_vserv_clnt_crank0(
 		uint16_t Blk = 0;
 		uint16_t Seq = 0;
 
+		struct GsPlayBackBuf *PBBuf = NULL;
+
 		if (gs_packet_space(Packet, (Offset += 1), 1 /*mode*/ + 2 /*id*/ + 2 /*blk*/ + 2 /*seq*/))
 			GS_ERR_CLEAN_J(groupmodemsg, 1);
 
@@ -185,7 +192,19 @@ int gs_vserv_clnt_crank0(
 		//   prevent generating those (fix ex gs_vserv_user_genid)
 		GS_ASSERT(Id != GS_VSERV_USER_ID_SERVFILL_FIXME);
 
+		Offset += 7; /* rest is data */
+
+		GS_ASSERT(Offset <= Packet->dataLength);
+
+		if (!!(r = gs_playback_buf_create_copying(Packet->data + Offset, Packet->dataLength - Offset, &PBBuf)))
+			GS_GOTO_CLEAN();
+
+		if (!!(r = gs_playback_packet_insert(Ctx->mPlayBack, TimeStamp, Id, Blk, Seq, GS_ARGOWN(&PBBuf))))
+			GS_GOTO_CLEAN();
+
 	clean_groupmodemsg:
+		GS_DELETE_F(&PBBuf, gs_playback_buf_destroy);
+
 		if (!!r)
 			GS_GOTO_CLEAN();
 	}
@@ -204,12 +223,25 @@ int gs_vserv_clnt_callback_create(struct GsVServClnt *Clnt)
 {
 	int r = 0;
 
-	struct GsVServClntCtx *Ctx = new GsVServClntCtx();
+	struct GsVServClntCtx *Ctx = NULL;
+
+	struct GsRecord   *Record = NULL;
+	struct GsPlayBack *PlayBack = NULL;
+
+	if (!!(r = gs_record_create(&Record)))
+		GS_GOTO_CLEAN();
+
+	if (!!(r = gs_playback_create(&PlayBack, GS_PLAYBACK_FLOWS_NUM, GS_PLAYBACK_FLOW_BUFS_NUM)))
+		GS_GOTO_CLEAN();
+
+	Ctx = new GsVServClntCtx();
 	Ctx->mBlk = 0;
 	Ctx->mSeq = 0;
 	Ctx->mName.mName = std::string();
 	Ctx->mName.mServ = std::string();
 	Ctx->mName.mId = GS_VSERV_USER_ID_SERVFILL_FIXME;
+	Ctx->mRecord = GS_ARGOWN(&Record);
+	Ctx->mPlayBack = GS_ARGOWN(&PlayBack);
 
 	if (!!(r = gs_vserv_clnt_ctx_set(Clnt, Ctx)))
 		GS_GOTO_CLEAN();
@@ -333,7 +365,8 @@ clean:
 
 int gs_vserv_clnt_callback_update_other(
 	struct GsVServClnt *Clnt,
-	long long TimeStamp)
+	long long TimeStamp,
+	uint32_t Keys /*hmmm*/)
 {
 	int r = 0;
 
@@ -347,6 +380,27 @@ int gs_vserv_clnt_callback_update_other(
 	if (!!(r = gs_vserv_clnt_ctx_get(Clnt, &Ctx)))
 		GS_GOTO_CLEAN();
 
+	/* recording and network sending of recorded sound data */
+
+	while (true) {
+		size_t  NumFraProcessed = 0;
+		uint8_t FraBuf[GS_OPUS_FRAME_48KHZ_20MS_SAMP_NUM];
+		size_t  LenFra = 0;
+		uint8_t  Mode = 0;
+		uint16_t Blk  = 0;
+		if (!!(r = gs_record_capture_drain(Ctx->mRecord, sizeof(uint16_t), GS_OPUS_FRAME_48KHZ_20MS_SAMP_NUM, FraBuf, sizeof FraBuf, &LenFra, &NumFraProcessed)))
+			GS_GOTO_CLEAN();
+		if (NumFraProcessed == 0)
+			break;
+		Mode = (Keys >> 0) & 0xFF;
+		Blk  = (Keys >> 8) & 0xFFFF;
+		if (!!(r = gs_vserv_clnt_callback_update_record(Clnt, TimeStamp, Mode, GS_VSERV_USER_ID_SERVFILL_FIXME, Blk, FraBuf, LenFra)))
+			GS_GOTO_CLEAN();
+	}
+
+	/* network receiving and general network processing
+	     receives sound data (ex accumulates playback with gs_playback_packet_insert) */
+
 	if (!!(r = gs_renamer_update(&Ctx->mRenamer, Clnt, TimeStamp)))
 		GS_GOTO_CLEAN();
 
@@ -356,11 +410,25 @@ int gs_vserv_clnt_callback_update_other(
 		if (!!(r = gs_vserv_clnt_receive(Clnt, &Addr, Packet.data, Packet.dataLength, &Packet.dataLength)))
 			GS_GOTO_CLEAN();
 
+		if (Packet.dataLength == 0)
+			break;
+
 		GS_LOG(I, S, "gs_vserv_clnt_callback_update_other receive");
 
 		if (!!(r = gs_vserv_clnt_crank0(Clnt, Ctx, TimeStamp, &Packet)))
 			GS_GOTO_CLEAN();
 	}
+
+	/* processing of received and accumulated playback */
+
+	if (!!(r = gs_playback_recycle(Ctx->mPlayBack)))
+		GS_GOTO_CLEAN();
+
+	if (!!(r = gs_playback_harvest_and_enqueue(Ctx->mPlayBack, TimeStamp)))
+		GS_GOTO_CLEAN();
+
+	if (!!(r = gs_playback_ensure_playing(Ctx->mPlayBack)))
+		GS_GOTO_CLEAN();
 
 clean:
 

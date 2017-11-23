@@ -5,6 +5,7 @@
 #include <memory>
 #include <utility>
 #include <map>
+#include <set>
 
 #include <AL/al.h>
 #include <AL/alc.h>
@@ -15,19 +16,12 @@
 
 #define GS_AL_BUFFER_INVALID 0xFFFFFFFF
 
+typedef std::set<struct GsPlayBackFlowKey> gs_playback_affinity_t;
+
 struct GsPlayBackFlowKey
 {
 	uint16_t mId;
 	uint16_t mBlk;
-};
-
-struct GsPlayBackBuf
-{
-	uint8_t *mDataBuf; size_t mLenData;
-	size_t mDataOffset;
-
-	uint8_t *mPrivPtr;
-	int(*mCbDataDestroy)(uint8_t *PrivPtr);
 };
 
 struct GsPlayBackFlow
@@ -54,7 +48,57 @@ struct GsPlayBack
 	ALuint *mSourceVec;
 	size_t  *mStackCntVec;
 	ALuint **mBufferStackVec;
+
+	gs_playback_affinity_t mAffinity;
 };
+
+static int gs_playback_buf_data_destroy_free(uint8_t *DataPtr);
+
+int gs_playback_buf_data_destroy_free(uint8_t *DataPtr)
+{
+	free(DataPtr);
+	return 0;
+}
+
+int gs_playback_buf_create_copying(
+	uint8_t *DataBuf, size_t LenData,
+	struct GsPlayBackBuf **oPBBuf)
+{
+	int r = 0;
+
+	struct GsPlayBackBuf *PBBuf = NULL;
+
+	uint8_t *CpyBuf = NULL;
+	
+	if (!(CpyBuf = (uint8_t *)malloc(LenData)))
+		GS_ERR_CLEAN(1);
+	memcpy(CpyBuf, DataBuf, LenData);
+
+	PBBuf = new GsPlayBackBuf();
+	PBBuf->mDataPtr = GS_ARGOWN(&CpyBuf);
+	PBBuf->mLenData = LenData;
+	PBBuf->mDataOffset = 0;
+	PBBuf->mCbDataDestroy = gs_playback_buf_data_destroy_free;
+
+	if (oPBBuf)
+		*oPBBuf = GS_ARGOWN(&PBBuf);
+
+clean:
+	free(CpyBuf);
+	GS_DELETE_F(&PBBuf, gs_playback_buf_destroy);
+
+	return r;
+}
+
+int gs_playback_buf_destroy(struct GsPlayBackBuf *PBBuf)
+{
+	if (PBBuf) {
+		if (!! PBBuf->mCbDataDestroy(PBBuf->mDataPtr))
+			GS_ASSERT(0);
+		GS_DELETE(&PBBuf, struct GsPlayBackBuf);
+	}
+	return 0;
+}
 
 int gs_playback_create(
 	struct GsPlayBack **oPlayBack,
@@ -84,6 +128,9 @@ int gs_playback_create(
 	PlayBack->mSourceVec = NULL;
 	PlayBack->mStackCntVec = GS_ARGOWN(&StackCntVec);
 	PlayBack->mBufferStackVec = GS_ARGOWN(&BufferStackVec);
+	PlayBack->mAffinity; /*dummy*/
+
+	GS_ASSERT(alcGetCurrentContext() != NULL);
 
 	alGenSources(PlayBack->mFlowsNum, PlayBack->mSourceVec);
 	GS_NOALERR();
@@ -150,27 +197,23 @@ int gs_playback_packet_insert(
 		if (it1 == PlayBack->mMapFlow.end()) {
 			struct GsPlayBackFlow PBFlow;
 			PBFlow.mMapBuf; /*dummy*/
+			PBFlow.mTimeStampFirstReceipt = TimeStamp;
+			PBFlow.mNextSeq = 0;
 			it1 = (PlayBack->mMapFlow.insert(std::make_pair(Key, std::move(PBFlow)))).first;
 		}
 
 		auto it2 = it1->second.mMapBuf.find(Seq);
 
 		if (it2 == it1->second.mMapBuf.end()) {
-			// FIXME: sp<GsPlayBackBuf> PBBuf(GS_ARGOWN(&PBBuf), gs_playback_buf_destroy);
-			sp<GsPlayBackBuf> PBBuf(GS_ARGOWN(&PBBuf));
+			sp<GsPlayBackBuf> PBBuf(GS_ARGOWN(&PBBuf), gs_playback_buf_destroy);
 			it2 = (it1->second.mMapBuf.insert(std::make_pair(Seq, std::move(PBBuf)))).first;
-		}
-
-		if (it1->second.mMapBuf.size() == 1) {
-			it1->second.mTimeStampFirstReceipt = TimeStamp;
-			it1->second.mNextSeq = 0;
 		}
 	}
 
 noclean:
 
 clean:
-	// FIXME: GS_DELETE_F(&PBBuf, gs_playback_buf_destroy);
+	GS_DELETE_F(&PBBuf, gs_playback_buf_destroy);
 
 	return r;
 }
@@ -180,12 +223,12 @@ int gs_playback_stacks_check(struct GsPlayBack *PlayBack)
 	int r = 0;
 
 	for (size_t i = 0; i < PlayBack->mFlowsNum; i++) {
-		std::map<ALuint, int> UniqMap;
-		for (size_t j = 0; j < PlayBack->mFlowBufsNum; j++)
-			UniqMap[PlayBack->mBufferStackVec[i][j]] = 0;
-		if (UniqMap.size() != PlayBack->mFlowBufsNum)
-			GS_ERR_CLEAN(1);
+		std::set<ALuint, int> UniqSet;
 		if (PlayBack->mStackCntVec[i] > PlayBack->mFlowBufsNum)
+			GS_ERR_CLEAN(1);
+		for (size_t j = 0; j < PlayBack->mStackCntVec[i]; j++)
+			UniqSet.insert(PlayBack->mBufferStackVec[i][j]);
+		if (UniqSet.size() != PlayBack->mStackCntVec[i])
 			GS_ERR_CLEAN(1);
 		for (size_t j = PlayBack->mStackCntVec[i]; j < PlayBack->mFlowBufsNum; j++)
 			if (PlayBack->mBufferStackVec[i][j] != GS_AL_BUFFER_INVALID)
@@ -224,7 +267,7 @@ int gs_playback_harvest(
 	struct GsPlayBack *PlayBack,
 	long long TimeStamp,
 	size_t VecNum, /* length for all three vecs */
-	struct GsPlayBackFlowKey *FlowsVec,
+	struct GsPlayBackFlowKey *FlowsVec, /*notowned*/
 	struct GsPlayBackBuf ***ioSlotsVec, /*notowned*/
 	size_t                 *ioCountVec /*notowned*/)
 {
@@ -276,22 +319,33 @@ int gs_playback_harvest_and_enqueue(
 	GS_ALLOCA_VAR(SlotsVec, GsPlayBackBuf *, PlayBack->mFlowsNum * PlayBack->mFlowBufsNum);
 	GS_ALLOCA_VAR(CountVec, size_t, PlayBack->mFlowsNum);
 
-	for (size_t i = 0; i < PlayBack->mFlowsNum; i++)
+	GS_ALLOCA_VAR(FlowKeysVec, GsPlayBackFlowKey, PlayBack->mFlowsNum);
+
+	size_t FlowsToHarvestNum = 0;
+
+	for (auto it = PlayBack->mAffinity.begin(); it != PlayBack->mAffinity.end(); ++it)
+		FlowKeysVec[FlowsToHarvestNum++] = *it;
+	GS_ASSERT(FlowsToHarvestNum <= PlayBack->mFlowsNum);
+
+	for (size_t i = 0; i < FlowsToHarvestNum; i++)
 		SlotsPtrVec[i] = SlotsVec + (PlayBack->mFlowBufsNum * i);
 
-	for (size_t i = 0; i < PlayBack->mFlowsNum; i++)
+	for (size_t i = 0; i < FlowsToHarvestNum; i++)
 		CountVec[i] = PlayBack->mStackCntVec[i];
 
-	if (!!(r = gs_playback_harvest(PlayBack, TimeStamp, PlayBack->mFlowsNum, NULL/*FIXME*/, SlotsPtrVec, CountVec)))
+	// FIXME: somehow need to make sure that buffers received through gs_playback_harvest are not destroyed while in use
+	//        currently this is done by just not modifying the mMapBuf inside the GsPlayBackFlow structures
+
+	if (!!(r = gs_playback_harvest(PlayBack, TimeStamp, FlowsToHarvestNum, FlowKeysVec, SlotsPtrVec, CountVec)))
 		GS_GOTO_CLEAN();
 
-	for (size_t i = 0; i < PlayBack->mFlowsNum; i++) {
+	for (size_t i = 0; i < FlowsToHarvestNum; i++) {
 		GS_ASSERT(CountVec[i] <= PlayBack->mStackCntVec[i]);
 		/* transfer CountVec[i] GsPlayBackBufs into OpenAL buffers and queue them */
 		for (size_t j = 0; j < CountVec[i]; j++) {
 			struct GsPlayBackBuf *PBBuf = SlotsPtrVec[i][j];
 			ALuint BufferForPlayBack = PlayBack->mBufferStackVec[i][(PlayBack->mStackCntVec[i] - 1) - j];
-			alBufferData(BufferForPlayBack, AL_FORMAT_MONO16, PBBuf->mDataBuf + PBBuf->mDataOffset, PBBuf->mLenData, GS_48KHZ);
+			alBufferData(BufferForPlayBack, AL_FORMAT_MONO16, PBBuf->mDataPtr + PBBuf->mDataOffset, PBBuf->mLenData, GS_48KHZ);
 			GS_NOALERR();
 			alSourceQueueBuffers(PlayBack->mSourceVec[i], 1, &BufferForPlayBack);
 			GS_NOALERR();
@@ -322,6 +376,54 @@ int gs_playback_ensure_playing(struct GsPlayBack *PlayBack)
 			GS_NOALERR();
 		}
 	}
+
+clean:
+
+	return r;
+}
+
+int gs_playback_affinity_process(struct GsPlayBack *PlayBack)
+{
+	int r = 0;
+
+	/* drop expired flows */
+
+	for (auto it = PlayBack->mAffinity.begin(); it != PlayBack->mAffinity.end();) {
+		int Alive = 0;
+		if (!!(r = gs_playback_affinity_flow_liveness(PlayBack, &*it, &Alive)))
+			GS_GOTO_CLEAN();
+		if (Alive) /*keep*/
+			++it;
+		else       /*drop*/
+			it = PlayBack->mAffinity.erase(it);
+	}
+
+	/* fill for up to max flows */
+
+	for (auto it = PlayBack->mMapFlow.begin(); it != PlayBack->mMapFlow.end() && PlayBack->mAffinity.size() < PlayBack->mFlowsNum; ++it) {
+		if (PlayBack->mAffinity.find(it->first) != PlayBack->mAffinity.end())
+			continue;
+		PlayBack->mAffinity.insert(it->first);
+	}
+
+clean:
+
+	return r;
+}
+
+int gs_playback_affinity_flow_liveness(struct GsPlayBack *PlayBack, const struct GsPlayBackFlowKey *Key, int *oAlive)
+{
+	int r = 0;
+
+	// FIXME: maybe something wrt rbegin() element vs mSeqNext
+	//          ie we processed all sound packets received so far
+	//        probably need to check against TimeStamp though?
+	// FIXME: maybe just check if flow exists and let the processing routines
+	//        (already computing wrt TimeStamp/SeqNext) erase a flow on expiry
+
+	GS_ASSERT(0);
+
+	*oAlive = 0;
 
 clean:
 

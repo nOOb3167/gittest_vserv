@@ -42,7 +42,8 @@ int gs_vserv_clnt_callback_update_record(
 	uint8_t *FraBuf, size_t LenFra);
 int gs_vserv_clnt_callback_update_other(
 	struct GsVServClnt *Clnt,
-	long long TimeStamp);
+	long long TimeStamp,
+	uint32_t Keys /*hmmm*/);
 
 // pedantically version-define the header so it may be bundled into foreign source trees?
 //   version passed to create?
