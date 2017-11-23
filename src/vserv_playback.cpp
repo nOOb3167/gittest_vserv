@@ -442,14 +442,11 @@ int gs_playback_affinity_flow_liveness(
 		     - we are (time-wise) sufficiently past the last arrived/received packet in the flow
 			 - or, should none have arrived, we are sufficiently past the playback start time of that flow
 		   sufficiently behind meaning GS_PLAYBACK_FLOW_DELAY_EXPIRY_MS or more msec of delay */
-		long long ExpiryComparisonStartTime = 0;
+		long long ExpiryComparisonStartTime = FlowPlayBackStartTime;
 		if (itLastReceived != itFlow->second.mMapBuf.rend()) {
 			const uint16_t  SeqLastReceived  = itLastReceived->first;
 			const long long LastReceivedTime = SeqLastReceived * GS_OPUS_FRAME_DURATION_20MS;
 			ExpiryComparisonStartTime = LastReceivedTime;
-		}
-		else {
-			ExpiryComparisonStartTime = FlowPlayBackStartTime;
 		}
 		ExpiryComparisonStartTime += GS_PLAYBACK_FLOW_DELAY_EXPIRY_MS;
 		if (ExpiryComparisonStartTime < TimeStamp)
