@@ -302,6 +302,7 @@ int gs_playback_harvest(
 			ioSlotsVec[i][j] = PBBuf;
 			ioCountVec[i] = j;
 		}
+		itFlow->second.mNextSeq += Count;
 	}
 
 clean:
