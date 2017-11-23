@@ -1,4 +1,5 @@
 #include <cstdlib>
+#include <climits>
 
 #include <atomic>
 #include <thread>
@@ -14,6 +15,8 @@
 #include <gittest/vserv_clnt.h>
 #include <gittest/vserv_helpers.h>
 #include <gittest/vserv_record.h>
+
+#define GS_CLNT_ONE_TICK_MS 20
 
 struct GsVServClnt
 {
@@ -93,16 +96,19 @@ void threadfunc(struct GsVServClnt *Clnt)
 
 	std::chrono::high_resolution_clock Clock;
 
-	long long TimeStamp = 0;
+	long long TimeStampLastRun = std::chrono::duration_cast<std::chrono::milliseconds>(Clock.now().time_since_epoch()).count();
 
 	while (true) {
 		uint32_t Keys = 0;
-		// FIXME: hardcoded timeout (should be prorated wrt worktime)
-		if (! Clnt->mSocket->WaitData(20))
+		long long TimeStampBeforeWait = std::chrono::duration_cast<std::chrono::milliseconds>(Clock.now().time_since_epoch()).count();
+		if (TimeStampBeforeWait < TimeStampLastRun) /* backwards clock? wtf? */
+			TimeStampBeforeWait = LLONG_MAX;        /* just ensure processing runs immediately */
+		long long TimeRemainingToFullTick = GS_CLNT_ONE_TICK_MS - GS_MIN(TimeStampBeforeWait - TimeStampLastRun, GS_CLNT_ONE_TICK_MS);
+		if (! Clnt->mSocket->WaitData(TimeRemainingToFullTick))
 			continue;
-		TimeStamp = std::chrono::duration_cast<std::chrono::milliseconds>(Clock.now().time_since_epoch()).count();
+		TimeStampLastRun = std::chrono::duration_cast<std::chrono::milliseconds>(Clock.now().time_since_epoch()).count();
 		Keys = Clnt->mKeys.load();
-		if (!!(r = gs_vserv_clnt_callback_update_other(Clnt, TimeStamp, Keys)))
+		if (!!(r = gs_vserv_clnt_callback_update_other(Clnt, TimeStampLastRun, Keys)))
 			GS_GOTO_CLEAN();
 	}
 

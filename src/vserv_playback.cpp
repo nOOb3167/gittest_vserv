@@ -383,7 +383,7 @@ clean:
 	return r;
 }
 
-int gs_playback_affinity_process(struct GsPlayBack *PlayBack)
+int gs_playback_affinity_process(struct GsPlayBack *PlayBack, long long TimeStamp)
 {
 	int r = 0;
 
@@ -391,7 +391,7 @@ int gs_playback_affinity_process(struct GsPlayBack *PlayBack)
 
 	for (auto it = PlayBack->mAffinity.begin(); it != PlayBack->mAffinity.end();) {
 		int Alive = 0;
-		if (!!(r = gs_playback_affinity_flow_liveness(PlayBack, &*it, &Alive)))
+		if (!!(r = gs_playback_affinity_flow_liveness(PlayBack, TimeStamp, &*it, &Alive)))
 			GS_GOTO_CLEAN();
 		if (Alive) /*keep*/
 			++it;

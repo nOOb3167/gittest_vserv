@@ -53,7 +53,7 @@ int gs_playback_harvest_and_enqueue(
 	struct GsPlayBack *PlayBack,
 	long long TimeStamp);
 int gs_playback_ensure_playing(struct GsPlayBack *PlayBack);
-int gs_playback_affinity_process(struct GsPlayBack *PlayBack);
+int gs_playback_affinity_process(struct GsPlayBack *PlayBack, long long TimeStamp);
 int gs_playback_affinity_flow_liveness(
 	struct GsPlayBack *PlayBack,
 	long long TimeStamp,

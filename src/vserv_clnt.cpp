@@ -424,6 +424,9 @@ int gs_vserv_clnt_callback_update_other(
 	if (!!(r = gs_playback_recycle(Ctx->mPlayBack)))
 		GS_GOTO_CLEAN();
 
+	if (!!(r = gs_playback_affinity_process(Ctx->mPlayBack, TimeStamp)))
+		GS_GOTO_CLEAN();
+
 	if (!!(r = gs_playback_harvest_and_enqueue(Ctx->mPlayBack, TimeStamp)))
 		GS_GOTO_CLEAN();
 
