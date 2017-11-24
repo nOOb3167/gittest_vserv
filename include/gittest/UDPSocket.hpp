@@ -1,6 +1,8 @@
 #ifndef _GITTEST_UDPSOCKET_H_
 #define _GITTEST_UDPSOCKET_H_
 
+#include <exception>
+
 #ifdef _WIN32
 // needed for mingw according to minetest socket.cpp
 #ifndef _WIN32_WINNT
@@ -24,7 +26,8 @@ class UDPSocket
 {
 public:
 	UDPSocket() {
-		init();
+		if (! init())
+			throw std::exception("UDPSocket::init");
 	}
 
 	~UDPSocket() {
@@ -41,7 +44,7 @@ public:
 
 		struct sockaddr_in SockAddr = {};
 
-		SockAddr.sin_family = mSinFamily;
+		SockAddr.sin_family = Addr.mSinFamily;
 		SockAddr.sin_port = htons(Addr.mSinPort);
 		SockAddr.sin_addr.s_addr = htonl(Addr.mSinAddr);
 
@@ -73,7 +76,7 @@ public:
 			}
 		}
 
-		return r;
+		return !r ? true : false;
 	}
 
 	void Send(const GsVServClntAddress &Dest, const void *Data, int Size) {
@@ -171,6 +174,14 @@ public:
 		*oAddr = ntohl(InAddr.s_addr);
 
 		return 0;
+	}
+
+	static void sockets_init() {
+#ifdef _WIN32
+		WSADATA WsaData;
+		if (!! WSAStartup(MAKEWORD(2, 2), &WsaData))
+			throw std::exception("UDPSocket::sockets_init");
+#endif 
 	}
 
 private:

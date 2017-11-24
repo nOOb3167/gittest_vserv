@@ -1,3 +1,7 @@
+#ifdef _MSC_VER
+#pragma warning(disable : 4267 4102)  // conversion from size_t, unreferenced label
+#endif /* _MSC_VER */
+
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -16,13 +20,19 @@
 
 #define GS_AL_BUFFER_INVALID 0xFFFFFFFF
 
-typedef std::set<struct GsPlayBackFlowKey> gs_playback_affinity_t;
-
 struct GsPlayBackFlowKey
 {
 	uint16_t mId;
 	uint16_t mBlk;
 };
+
+struct gs_playback_flow_key_less_t
+{
+	bool operator()(const GsPlayBackFlowKey &a, const GsPlayBackFlowKey &b) const
+		{ return a.mId != b.mId ? (a.mId < b.mId) : (a.mBlk < b.mBlk); }
+};
+
+typedef std::set<struct GsPlayBackFlowKey, gs_playback_flow_key_less_t> gs_playback_affinity_t;
 
 struct GsPlayBackFlow
 {
@@ -42,7 +52,7 @@ struct GsPlayBack
 	size_t mFlowsNum; /* length for Source, StackCnt, BufferStack vecs */
 	size_t mFlowBufsNum;
 
-	std::map<GsPlayBackFlowKey, GsPlayBackFlow> mMapFlow;
+	std::map<GsPlayBackFlowKey, GsPlayBackFlow, gs_playback_flow_key_less_t> mMapFlow;
 	std::map<uint16_t, GsPlayBackId> mMapId;
 
 	ALuint *mSourceVec;
@@ -125,7 +135,7 @@ int gs_playback_create(
 	PlayBack->mFlowBufsNum = FlowBufsNum;
 	PlayBack->mMapFlow; /*dummy*/
 	PlayBack->mMapId; /*dummy*/
-	PlayBack->mSourceVec = NULL;
+	PlayBack->mSourceVec = GS_ARGOWN(&SourceVec);
 	PlayBack->mStackCntVec = GS_ARGOWN(&StackCntVec);
 	PlayBack->mBufferStackVec = GS_ARGOWN(&BufferStackVec);
 	PlayBack->mAffinity; /*dummy*/
@@ -144,8 +154,9 @@ int gs_playback_create(
 clean:
 	GS_DELETE_ARRAY(&SourceVec, ALuint);
 	GS_DELETE_ARRAY(&StackCntVec, size_t);
-	for (size_t i = 0; i < FlowsNum; i++)
-		GS_DELETE_ARRAY(&BufferStackVec[i], ALuint);
+	if (BufferStackVec)
+		for (size_t i = 0; i < FlowsNum; i++)
+			GS_DELETE_ARRAY(&BufferStackVec[i], ALuint);
 	GS_DELETE_ARRAY(&BufferStackVec, ALuint *);
 
 	GS_DELETE_F(&PlayBack, gs_playback_destroy);
@@ -159,8 +170,9 @@ int gs_playback_destroy(struct GsPlayBack *PlayBack)
 	if (PlayBack) {
 		GS_DELETE_ARRAY(&PlayBack->mSourceVec, ALuint);
 		GS_DELETE_ARRAY(&PlayBack->mStackCntVec, size_t);
-		for (size_t i = 0; i < PlayBack->mFlowsNum; i++)
-			GS_DELETE_ARRAY(&PlayBack->mBufferStackVec[i], ALuint);
+		if (PlayBack->mBufferStackVec)
+			for (size_t i = 0; i < PlayBack->mFlowsNum; i++)
+				GS_DELETE_ARRAY(&PlayBack->mBufferStackVec[i], ALuint);
 		GS_DELETE_ARRAY(&PlayBack->mBufferStackVec, ALuint *);
 		GS_DELETE(&PlayBack, struct GsPlayBack);
 	}
@@ -223,7 +235,7 @@ int gs_playback_stacks_check(struct GsPlayBack *PlayBack)
 	int r = 0;
 
 	for (size_t i = 0; i < PlayBack->mFlowsNum; i++) {
-		std::set<ALuint, int> UniqSet;
+		std::set<ALuint> UniqSet;
 		if (PlayBack->mStackCntVec[i] > PlayBack->mFlowBufsNum)
 			GS_ERR_CLEAN(1);
 		for (size_t j = 0; j < PlayBack->mStackCntVec[i]; j++)
@@ -420,7 +432,7 @@ int gs_playback_affinity_flow_liveness(
 {
 	int r = 0;
 
-	size_t Alive = 0;
+	int Alive = 0;
 
 	auto itFlow = PlayBack->mMapFlow.find(*Key);
 

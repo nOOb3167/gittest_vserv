@@ -127,21 +127,42 @@ int stuff(struct GsAuxConfigCommonVars *CommonVars)
 {
 	int r = 0;
 
+	ALCdevice *Device = NULL;
+	ALCcontext *Context = NULL;
+
 	std::random_device RandDev;
 
 	struct GsVServClntAddress Addr = {};
+	struct GsVServClntAddress AddrAny = {};
 	struct GsVServClnt *Clnt = NULL;
 
-	Addr.mSinFamily = AF_UNIX;
+	if (!(Device = alcOpenDevice(NULL)))
+		GS_ERR_CLEAN(1);
+
+	if (!(Context = alcCreateContext(Device, NULL)))
+		GS_ERR_CLEAN(1);
+
+	if (! alcMakeContextCurrent(Context))
+		GS_ERR_CLEAN(1);
+
+	GS_NOALERR();
+
+	Addr.mSinFamily = AF_INET;
 	Addr.mSinPort = CommonVars->VServPort;
 	Addr.mSinAddr = 0;
+
+	AddrAny.mSinFamily = AF_INET;
+	AddrAny.mSinPort = 0;
+	AddrAny.mSinAddr = INADDR_ANY;
+
+	UDPSocket::sockets_init();
 
 	if (!!(r = UDPSocket::GetHostByName(CommonVars->VServHostNameBuf, &Addr.mSinAddr)))
 		GS_GOTO_CLEAN();
 
 	Clnt = new GsVServClnt();
 	Clnt->mCtx = NULL;
-	Clnt->mSocket = sp<GsVServClnt>(new UDPSocket());
+	Clnt->mSocket = sp<UDPSocket>(new UDPSocket());
 	Clnt->mAddr = Addr;
 	Clnt->mKeys.store(0);
 	Clnt->mRandGen = std::mt19937(RandDev());
@@ -150,7 +171,7 @@ int stuff(struct GsAuxConfigCommonVars *CommonVars)
 	if (!!(r = gs_vserv_clnt_callback_create(Clnt)))
 		GS_GOTO_CLEAN();
 
-	Clnt->mSocket->Bind(Clnt->mAddr);
+	Clnt->mSocket->Bind(AddrAny);
 
 	Clnt->mThread = sp<std::thread>(new std::thread(threadfunc, Clnt));
 

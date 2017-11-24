@@ -15,8 +15,6 @@ int gs_record_create(struct GsRecord **oRecord)
 
 	ALCdevice *CapDevice = NULL;
 
-	GS_ASSERT(alcGetCurrentContext() != NULL);
-
 	if (!(CapDevice = alcCaptureOpenDevice(NULL, GS_48KHZ, AL_FORMAT_MONO16, GS_RECORD_ARBITRARY_BUFFER_SAMPLES_NUM)))
 		GS_GOTO_CLEAN();
 
@@ -52,12 +50,14 @@ int gs_record_start(struct GsRecord *Record)
 {
 	alcCaptureStart(Record->mCapDevice);
 	GS_NOALERR();
+	return 0;
 }
 
 int gs_record_stop(struct GsRecord *Record)
 {
 	alcCaptureStop(Record->mCapDevice);
 	GS_NOALERR();
+	return 0;
 }
 
 int gs_record_capture_drain(
