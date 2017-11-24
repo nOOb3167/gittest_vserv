@@ -12,9 +12,13 @@
 #include <AL/alc.h>
 
 #include <gittest/misc.h>
+#include <gittest/config.h>
+#include <gittest/log.h>
 #include <gittest/vserv_clnt.h>
 #include <gittest/vserv_helpers.h>
 #include <gittest/vserv_record.h>
+// FIXME: BLAH GetHostByName
+#include <gittest/UDPSocket.hpp>
 
 #define GS_CLNT_ONE_TICK_MS 20
 
@@ -28,6 +32,8 @@ struct GsVServClnt
 	std::mt19937                            mRandGen;
 	std::uniform_int_distribution<uint32_t> mRandDis;
 };
+
+GsLogList *g_gs_log_list_global = gs_log_list_global_create();
 
 int gs_vserv_clnt_ctx_set(struct GsVServClnt *Clnt, struct GsVServClntCtx *Ctx)
 {
@@ -117,7 +123,7 @@ clean:
 		GS_ASSERT(0);
 }
 
-int stuff(int argc, char **argv)
+int stuff(struct GsAuxConfigCommonVars *CommonVars)
 {
 	int r = 0;
 
@@ -127,8 +133,11 @@ int stuff(int argc, char **argv)
 	struct GsVServClnt *Clnt = NULL;
 
 	Addr.mSinFamily = AF_UNIX;
-	Addr.mSinPort = 3757;
-	Addr.mSinAddr = htons(0x7F000001);
+	Addr.mSinPort = CommonVars->VServPort;
+	Addr.mSinAddr = 0;
+
+	if (!!(r = UDPSocket::GetHostByName(CommonVars->VServHostNameBuf, &Addr.mSinAddr)))
+		GS_GOTO_CLEAN();
 
 	Clnt = new GsVServClnt();
 	Clnt->mCtx = NULL;
@@ -156,12 +165,34 @@ int main(int argc, char **argv)
 {
 	int r = 0;
 
-	if (!!(r = stuff(argc, argv)))
+	struct GsConfMap *ConfMap = NULL;
+	struct GsAuxConfigCommonVars CommonVars = {};
+
+	if (!!(r = gs_log_crash_handler_setup()))
 		GS_GOTO_CLEAN();
 
-clean:
-	if (!!r)
-		GS_ASSERT(0);
+	if (!!(r = gs_config_read_default_everything(&ConfMap)))
+		GS_GOTO_CLEAN();
 
-	return r;
+	if (!!(r = gs_config_get_common_vars(ConfMap, &CommonVars)))
+		GS_GOTO_CLEAN();
+
+	if (!!(r = gs_config_create_common_logs(ConfMap)))
+		GS_GOTO_CLEAN();
+
+	{
+		log_guard_t Log(GS_LOG_GET("selfup"));
+		if (!!(r = stuff(&CommonVars)))
+			GS_GOTO_CLEAN();
+	}
+
+clean:
+	GS_DELETE_F(&ConfMap, gs_conf_map_destroy);
+
+	gs_log_crash_handler_dump_global_log_list_suffix("_log", strlen("_log"));
+
+	if (!!r)
+		return EXIT_FAILURE;
+
+	return EXIT_SUCCESS;
 }

@@ -6,8 +6,9 @@
 #ifndef _WIN32_WINNT
 #  define _WIN32_WINNT 0x0501
 #endif
-#  include <windows.h>
+// include winsock2.h before windows.h scrubs
 #  include <winsock2.h>
+#  include <windows.h>
 #  include <ws2tcpip.h>
 typedef SOCKET socket_t;
 #endif
@@ -155,6 +156,21 @@ public:
 			GS_ASSERT(0);
 		/* dummy */
 		return false;
+	}
+
+	static int GetHostByName(const char *Name, unsigned long long *oAddr) {
+		struct hostent *HostEnt = NULL;
+
+		struct in_addr InAddr = {};
+
+		if (!(HostEnt = gethostbyname(Name)))
+			return 1;
+
+		GS_ASSERT(HostEnt->h_addrtype == AF_INET);
+		InAddr = *(struct in_addr *) HostEnt->h_addr;
+		*oAddr = ntohl(InAddr.s_addr);
+
+		return 0;
 	}
 
 private:
