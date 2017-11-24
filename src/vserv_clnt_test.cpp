@@ -104,6 +104,9 @@ void threadfunc(struct GsVServClnt *Clnt)
 
 	long long TimeStampLastRun = std::chrono::duration_cast<std::chrono::milliseconds>(Clock.now().time_since_epoch()).count();
 
+	if (!!(r = gs_vserv_clnt_callback_ident(Clnt, "abcd", 4, "efgh", 4, TimeStampLastRun)))
+		GS_GOTO_CLEAN();
+
 	while (true) {
 		uint32_t Keys = 0;
 		long long TimeStampBeforeWait = std::chrono::duration_cast<std::chrono::milliseconds>(Clock.now().time_since_epoch()).count();
