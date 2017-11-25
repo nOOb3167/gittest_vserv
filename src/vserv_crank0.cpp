@@ -194,6 +194,19 @@ int gs_vserv_groupall_lookup(
 	return 0;
 }
 
+/** returned pointer / vec ownership does not transfer to caller
+    use of returned data must cease before caller allows GroupAll to be destroyed */
+int gs_vserv_groupall_all(
+	struct GsVServGroupAll *GroupAll,
+	gs_vserv_user_id_t Id,
+	gs_vserv_user_id_t **oIdVec, /*null-returnable*/
+	size_t *oIdNum)
+{
+	*oIdVec = GroupAll->mIdVec;
+	*oIdNum = GroupAll->mIdNum;
+	return 0;
+}
+
 int gs_vserv_user_create(struct GsVServUser **oUser)
 {
 	int r = 0;
@@ -531,16 +544,24 @@ int gs_vserv_crank0(struct GsVServCtlCb *Cb, struct GsPacket *Packet, struct GsA
 
 		switch (Mode)
 		{
-			
+
 		case GS_VSERV_GROUP_MODE_S:
 		{
 			gs_vserv_user_id_t *IdVec = NULL;
 			size_t IdNum = 0;
+			gs_vserv_user_id_t DummyId = 0;
 			if (!!(r = gs_vserv_groupall_lookup(GroupAll.get(), Id, &IdVec, &IdNum)))
 				GS_GOTO_CLEAN_J(groupmodemsg);
 			if (! IdVec) {
-				GS_LOG(I, PF, "ungrouped [id=%d]", (int)Id);
-				GS_ERR_CLEAN_J(groupmodemsg, 0);
+				// FIXME: for testing purposes, ungrouped just routes to id0
+				static unsigned int Cnt = 0;
+				if (!(Cnt++ % 250))
+					GS_LOG(I, PF, "ungrouped [id=%d]", (int)Id);
+				IdVec = &DummyId;
+				IdNum = 1;
+
+				//GS_LOG(I, PF, "ungrouped [id=%d]", (int)Id);
+				//GS_ERR_CLEAN_J(groupmodemsg, 0);
 			}
 			if (!!(r = gs_vserv_enqueue_idvec(Respond, Packet, IdVec, IdNum, Ext->mUserIdAddr)))
 				GS_GOTO_CLEAN();
@@ -550,6 +571,8 @@ int gs_vserv_crank0(struct GsVServCtlCb *Cb, struct GsPacket *Packet, struct GsA
 		default:
 			GS_ASSERT(0);
 		}
+
+	noclean_groupmodemsg:
 
 	clean_groupmodemsg:
 		if (!!r)
