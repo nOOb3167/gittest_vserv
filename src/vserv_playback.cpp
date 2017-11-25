@@ -123,12 +123,18 @@ int gs_playback_create(
 	size_t  *StackCntVec = NULL;
 	ALuint **BufferStackVec = NULL;
 
-	SourceVec = new ALuint[FlowsNum]{};
-	StackCntVec = new size_t[FlowsNum]{ FlowBufsNum };
-	BufferStackVec = new ALuint*[FlowsNum]{};
+	SourceVec = new ALuint[FlowsNum];
+	StackCntVec = new (size_t[FlowsNum]);
+	BufferStackVec = new ALuint*[FlowsNum];
 
 	for (size_t i = 0; i < FlowsNum; i++)
-		BufferStackVec[i] = new ALuint[FlowBufsNum]{ GS_AL_BUFFER_INVALID };
+		StackCntVec[i] = FlowBufsNum;
+
+	for (size_t i = 0; i < FlowsNum; i++) {
+		BufferStackVec[i] = new ALuint[FlowBufsNum];
+		for (size_t j = 0; j < FlowBufsNum; j++)
+			BufferStackVec[i][j] = GS_AL_BUFFER_INVALID;
+	}
 
 	PlayBack = new GsPlayBack();
 	PlayBack->mFlowsNum = FlowsNum;
@@ -261,7 +267,7 @@ int gs_playback_recycle(struct GsPlayBack *PlayBack)
 		alGetSourcei(PlayBack->mSourceVec[i], AL_BUFFERS_PROCESSED, &NumProcessed);
 		GS_NOALERR();
 		/* can accept NumProcessed buffers? */
-		GS_ASSERT(PlayBack->mStackCntVec[i] + NumProcessed <= PlayBack->mFlowsNum);
+		GS_ASSERT(PlayBack->mStackCntVec[i] + NumProcessed <= PlayBack->mFlowBufsNum);
 		/* transfer NumProcessed buffers from OpenAL source to BufferStackVec */
 		alSourceUnqueueBuffers(PlayBack->mSourceVec[i], NumProcessed, &PlayBack->mBufferStackVec[i][PlayBack->mStackCntVec[i]]);
 		GS_NOALERR();

@@ -88,12 +88,12 @@ int gs_renamer_update(struct GsRenamer *Renamer, struct GsVServClnt *Clnt, long 
 
 	/* no update work needed at all */
 
-	if (gs_renamer_is_wanted(Renamer))
+	if (! gs_renamer_is_wanted(Renamer))
 		GS_ERR_NO_CLEAN(0);
 
 	/* update work needed - but not yet */
 
-	if (Renamer->mTimeStampLastRequested + GS_CLNT_ARBITRARY_IDENT_RESEND_TIMEOUT < TimeStamp)
+	if (TimeStamp < Renamer->mTimeStampLastRequested + GS_CLNT_ARBITRARY_IDENT_RESEND_TIMEOUT)
 		GS_ERR_NO_CLEAN(0);
 
 	/* update work - send / resent the ident message */
@@ -123,6 +123,8 @@ int gs_vserv_clnt_crank0(
 
 	if (gs_packet_space(Packet, 0, 1))
 		GS_ERR_CLEAN(1);
+
+	GS_LOG(I, PF, "pkt [cmd=%c]", (int)Packet->data[0]);
 
 	switch (Packet->data[0]) {
 
@@ -353,6 +355,10 @@ int gs_vserv_clnt_callback_update_record(
 
 	PacketOut.dataLength = 8 + LenFra;
 
+	/* commit mSeq */
+	// FIXME: overflow handling (maybe advance blk)
+	Ctx->mSeq += 1;
+
 	if (!!(r = gs_vserv_clnt_send(Clnt, PacketOut.data, PacketOut.dataLength)))
 		GS_GOTO_CLEAN();
 
@@ -382,9 +388,13 @@ int gs_vserv_clnt_callback_update_other(
 
 	/* recording and network sending of recorded sound data */
 
+	// FIXME: temporary testing dummy
+	if (!!(r = gs_record_start(Ctx->mRecord)))
+		GS_GOTO_CLEAN();
+
 	while (true) {
 		size_t  NumFraProcessed = 0;
-		uint8_t FraBuf[GS_OPUS_FRAME_48KHZ_20MS_SAMP_NUM];
+		uint8_t FraBuf[2 * GS_OPUS_FRAME_48KHZ_20MS_SAMP_NUM];
 		size_t  LenFra = 0;
 		uint8_t  Mode = 0;
 		uint16_t Blk  = 0;
@@ -394,7 +404,7 @@ int gs_vserv_clnt_callback_update_other(
 			break;
 		Mode = (Keys >> 0) & 0xFF;
 		Blk  = (Keys >> 8) & 0xFFFF;
-		if (!!(r = gs_vserv_clnt_callback_update_record(Clnt, TimeStamp, Mode, GS_VSERV_USER_ID_SERVFILL_FIXME, Blk, FraBuf, LenFra)))
+		if (!!(r = gs_vserv_clnt_callback_update_record(Clnt, TimeStamp, Mode, Ctx->mName.mId, Blk, FraBuf, LenFra)))
 			GS_GOTO_CLEAN();
 	}
 

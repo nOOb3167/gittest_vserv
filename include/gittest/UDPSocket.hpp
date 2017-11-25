@@ -114,7 +114,8 @@ public:
 		int SockAddrLen = sizeof SockAddr;
 		int NRecv = 0;
 
-		if (SOCKET_ERROR == (NRecv = recvfrom(mHandle, (char *) Data, Size, MSG_TRUNC, (struct sockaddr *) &SockAddr, &SockAddrLen)))
+		// FIXME: MSG_TRUNC not supported in winsock?
+		if (SOCKET_ERROR == (NRecv = recvfrom(mHandle, (char *) Data, Size, 0, (struct sockaddr *) &SockAddr, &SockAddrLen)))
 			GS_ERR_CLEAN(1);
 		if (SockAddrLen != sizeof SockAddr)
 			GS_ERR_CLEAN(1);
@@ -126,8 +127,10 @@ public:
 		Sender.mSinAddr = ntohl(SockAddr.sin_addr.s_addr);
 
 	clean:
-		if (!!r)
+		if (!!r) {
+			int dummy = WSAGetLastError();
 			NRecv = -1;
+		}
 
 		return NRecv;
 	}
@@ -142,8 +145,8 @@ public:
 
 		FD_ZERO(&RSet);
 		FD_SET(mHandle, &RSet);
-		TVal.tv_sec = TimeoutMs;
-		TVal.tv_usec = 0;
+		TVal.tv_sec = 0;
+		TVal.tv_usec = TimeoutMs * 1000;
 
 		if (SOCKET_ERROR == (NReady = select(mHandle + 1, &RSet, NULL, NULL, &TVal)))
 			GS_ERR_CLEAN(1);

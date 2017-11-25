@@ -58,7 +58,7 @@ int gs_vserv_clnt_receive(
 	int LenData = 0;
 
 	/* -1 return code aliasing error and lack-of-progress conditions.. nice api minetest */
-	if (-1 == (LenData = Clnt->mSocket->Receive(*ioAddrFrom, ioDataBuf, LenData))) {
+	if (-1 == (LenData = Clnt->mSocket->Receive(*ioAddrFrom, ioDataBuf, DataSize))) {
 		/* pretend -1 just means EAGAIN/EWOULDBLOCK/notreadable */
 		LenData = 0;
 		GS_ERR_NO_CLEAN(0);
@@ -104,17 +104,19 @@ void threadfunc(struct GsVServClnt *Clnt)
 
 	long long TimeStampLastRun = std::chrono::duration_cast<std::chrono::milliseconds>(Clock.now().time_since_epoch()).count();
 
+	// FIXME: temporary testing dummy
 	if (!!(r = gs_vserv_clnt_callback_ident(Clnt, "abcd", 4, "efgh", 4, TimeStampLastRun)))
 		GS_GOTO_CLEAN();
+	Clnt->mKeys.store('s');
 
 	while (true) {
 		uint32_t Keys = 0;
 		long long TimeStampBeforeWait = std::chrono::duration_cast<std::chrono::milliseconds>(Clock.now().time_since_epoch()).count();
+		bool WaitIndicatesDataArrived = 0;
 		if (TimeStampBeforeWait < TimeStampLastRun) /* backwards clock? wtf? */
 			TimeStampBeforeWait = LLONG_MAX;        /* just ensure processing runs immediately */
 		long long TimeRemainingToFullTick = GS_CLNT_ONE_TICK_MS - GS_MIN(TimeStampBeforeWait - TimeStampLastRun, GS_CLNT_ONE_TICK_MS);
-		if (! Clnt->mSocket->WaitData(TimeRemainingToFullTick))
-			continue;
+		WaitIndicatesDataArrived = Clnt->mSocket->WaitData(TimeRemainingToFullTick); /* note indication is not actually used */
 		TimeStampLastRun = std::chrono::duration_cast<std::chrono::milliseconds>(Clock.now().time_since_epoch()).count();
 		Keys = Clnt->mKeys.load();
 		if (!!(r = gs_vserv_clnt_callback_update_other(Clnt, TimeStampLastRun, Keys)))
