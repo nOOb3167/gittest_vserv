@@ -1,33 +1,33 @@
 # gittest_vserv
 
 SET(GITTEST_VSERV_HEADERS
-  include/gittest/vserv_net.h
   include/gittest/vserv_helpers.h
+  include/gittest/vserv_net.h
   ${GITTEST_LIB_HEADERS}
 )
 SET(GITTEST_VSERV_SOURCES
-  src/vserv_net_nix.cpp
-  src/vserv_enet.cpp
-  src/vserv_net_main.cpp
   src/vserv_crank0.cpp
+  src/vserv_enet.cpp
   src/vserv_helpers.cpp
+  src/vserv_net_main.cpp
+  src/vserv_net_nix.cpp
   ${GITTEST_LIB_SOURCES}
 )
 
 SET(GITTEST_VSERV_CLNT_TEST_HEADERS
-  include/gittest/vserv_record.h
-  include/gittest/vserv_playback.h
   include/gittest/vserv_clnt.h
   include/gittest/vserv_helpers.h
+  include/gittest/vserv_playback.h
+  include/gittest/vserv_record.h
   include/gittest/UDPSocket.hpp
   ${GITTEST_LIB_HEADERS}
 )
 SET(GITTEST_VSERV_CLNT_TEST_SOURCES
-  src/vserv_record.cpp
-  src/vserv_playback.cpp
   src/vserv_clnt.cpp
   src/vserv_clnt_test.cpp
   src/vserv_helpers.cpp
+  src/vserv_playback.cpp
+  src/vserv_record.cpp
   ${GITTEST_LIB_SOURCES}
 )
 
