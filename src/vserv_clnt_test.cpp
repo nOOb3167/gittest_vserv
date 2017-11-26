@@ -100,9 +100,9 @@ void threadfunc(struct GsVServClnt *Clnt)
 {
 	int r = 0;
 
-	std::chrono::high_resolution_clock Clock;
+	typedef std::chrono::high_resolution_clock Clock;
 
-	long long TimeStampLastRun = std::chrono::duration_cast<std::chrono::milliseconds>(Clock.now().time_since_epoch()).count();
+	long long TimeStampLastRun = std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now().time_since_epoch()).count();
 
 	// FIXME: temporary testing dummy
 	if (!!(r = gs_vserv_clnt_callback_ident(Clnt, "abcd", 4, "efgh", 4, TimeStampLastRun)))
@@ -111,13 +111,13 @@ void threadfunc(struct GsVServClnt *Clnt)
 
 	while (true) {
 		uint32_t Keys = 0;
-		long long TimeStampBeforeWait = std::chrono::duration_cast<std::chrono::milliseconds>(Clock.now().time_since_epoch()).count();
+		long long TimeStampBeforeWait = std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now().time_since_epoch()).count();
 		bool WaitIndicatesDataArrived = 0;
 		if (TimeStampBeforeWait < TimeStampLastRun) /* backwards clock? wtf? */
 			TimeStampBeforeWait = LLONG_MAX;        /* just ensure processing runs immediately */
 		long long TimeRemainingToFullTick = GS_CLNT_ONE_TICK_MS - GS_MIN(TimeStampBeforeWait - TimeStampLastRun, GS_CLNT_ONE_TICK_MS);
 		WaitIndicatesDataArrived = Clnt->mSocket->WaitData(TimeRemainingToFullTick); /* note indication is not actually used */
-		TimeStampLastRun = std::chrono::duration_cast<std::chrono::milliseconds>(Clock.now().time_since_epoch()).count();
+		TimeStampLastRun = std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now().time_since_epoch()).count();
 		Keys = Clnt->mKeys.load();
 		if (!!(r = gs_vserv_clnt_callback_update_other(Clnt, TimeStampLastRun, Keys)))
 			GS_GOTO_CLEAN();
