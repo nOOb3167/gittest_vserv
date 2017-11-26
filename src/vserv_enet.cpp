@@ -5,32 +5,18 @@
 #include <gittest/misc.h>
 #include <gittest/config.h>
 #include <gittest/vserv_net.h>
+#include <gittest/vserv_enet_priv.h>
 
 #define GS_VSERV_ENET_ARBITRARY_CLIENT_MAX 128
 
-struct GsVServEnet
+static unsigned long long gs_vserv_enet_addr_host_to_gs_addr_host(uint32_t EnetAddrHost);
+
+unsigned long long gs_vserv_enet_addr_host_to_gs_addr_host(uint32_t EnetAddrHost)
 {
-	struct GsAuxConfigCommonVars CommonVars;
-	struct GsVServCtlCb *mCb; /*notowned*/
-	ENetAddress mAddr;
-	ENetHost *mHost;
-};
+	return ENET_NET_TO_HOST_32(EnetAddrHost);
+}
 
-struct GsVServRespondM
-{
-	struct GsVServEnet *mEnet;
-	ENetPeer *mPeer;
-};
-
-int gs_vserv_enet_init();
-int gs_vserv_enet_create(
-	struct GsAuxConfigCommonVars *CommonVars,
-	struct GsVServCtlCb *Cb,
-	struct GsVServEnet **oEnet);
-int gs_vserv_enet_destroy(struct GsVServEnet *Enet);
-int gs_vserv_enet_receive_func(struct GsVServEnet *Enet);
-unsigned long long gs_vserv_enet_addr_host_to_gs_addr_host(uint32_t EnetAddrHost);
-
+// FIXME: should be in the public header really
 int gs_vserv_enet_init()
 {
 	return !! enet_initialize();
@@ -77,9 +63,14 @@ int gs_vserv_enet_destroy(struct GsVServEnet *Enet)
 }
 
 /** designed to be called on separate thread after GsVServEnet creation */
-int gs_vserv_enet_receive_func(struct GsVServEnet *Enet)
+int gs_vserv_enet_receive_func(
+	struct GsVServCtl *ServCtl)
 {
 	int r = 0;
+
+	struct GsVServCtlCb *XCb = gs_vserv_ctl_get_cb(ServCtl);
+	struct GsVServCtlCb0 *XCb0 = (struct GsVServCtlCb0 *) XCb;
+	struct GsVServEnet *Enet = XCb0->mEnet;
 
 	const size_t TimeoutGenerationMax = 4; /* [0,4] interval */
 	uint32_t TimeoutGenerationVec[]    = { 1,  5,  10, 20,  500 };
@@ -149,9 +140,4 @@ int gs_vserv_enet_receive_func(struct GsVServEnet *Enet)
 clean:
 
 	return r;
-}
-
-unsigned long long gs_vserv_enet_addr_host_to_gs_addr_host(uint32_t EnetAddrHost)
-{
-	return ENET_NET_TO_HOST_32(EnetAddrHost);
 }

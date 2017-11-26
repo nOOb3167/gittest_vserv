@@ -40,6 +40,7 @@ struct GsVServCtl
 {
 	size_t mNumThread;
 	pthread_t *mThreadVec; size_t mThreadNum;
+	pthread_t *mThreadMgmt; size_t mThreadMgmtNum;
 	int *mSockFdVec; size_t mSockFdNum;
 	int *mEPollFdVec; size_t mEPollFdNum;
 	struct GsVServWrite **mWriteVec; size_t mWriteNum;
@@ -47,6 +48,7 @@ struct GsVServCtl
 	int mEvtFdExitReq;
 	int mEvtFdExit;
 	struct GsVServCtlCb *mCb;
+	struct GsVServCtlReceiveCb mReceiveCb;
 };
 
 struct GsVServPthreadCtx
@@ -102,10 +104,9 @@ static int gs_vserv_receive_evt_event(
 static int gs_vserv_receive_writable(
 	struct GsVServCtl *ServCtl,
 	struct GsEPollCtx *EPollCtx);
-static int gs_vserv_receive_func(
-	struct GsVServCtl *ServCtl,
-	size_t SockIdx);
 static void * gs_vserv_receive_func_pthread(
+	void *arg);
+static void * gs_vserv_mgmt_receive_func_pthread(
 	void *arg);
 static int gs_vserv_epollctx_add_for(
 	int EPollFd,
@@ -443,7 +444,31 @@ void * gs_vserv_receive_func_pthread(
 
 	log_guard_t Log(GS_LOG_GET("serv"));
 
-	if (!!(r = gs_vserv_receive_func(ServCtl, SockIdx)))
+	if (!!(r = Ctx->CbReceiveFunc(ServCtl, SockIdx)))
+		GS_GOTO_CLEAN();
+
+clean:
+	GS_DELETE(&Ctx, struct GsVServPthreadCtx);
+
+	if (!!r)
+		GS_ASSERT(0);
+
+	return NULL;
+}
+
+void * gs_vserv_mgmt_receive_func_pthread(
+	void *arg)
+{
+	int r = 0;
+
+	struct GsVServPthreadCtx *Ctx = (struct GsVServPthreadCtx *) arg;
+	struct GsVServCtl *ServCtl = Ctx->mServCtl;
+	
+	GS_ASSERT(Ctx->mSockIdx == -1);
+
+	log_guard_t Log(GS_LOG_GET("mgmt"));
+
+	if (!!(r = Ctx->CbReceiveFuncM(ServCtl)))
 		GS_GOTO_CLEAN();
 
 clean:
@@ -505,6 +530,8 @@ int gs_vserv_ctl_create_part(
 	ServCtl->mNumThread = ThreadNum;
 	ServCtl->mThreadNum = ThreadNum;
 	ServCtl->mThreadVec = new pthread_t[ThreadNum];
+	ServCtl->mThreadMgmtNum = 1;
+	ServCtl->mThreadMgmt = new pthread_t[1];
 	ServCtl->mSockFdNum = ThreadNum;
 	ServCtl->mSockFdVec = new int[ThreadNum];
 	for (size_t i = 0; i < ThreadNum; i++)
@@ -517,7 +544,7 @@ int gs_vserv_ctl_create_part(
 	ServCtl->mWakeAsyncVec = new int[ThreadNum];
 	for (size_t i = 0; i < ThreadNum; i++)
 		ServCtl->mWakeAsyncVec[i] = -1;
-	if (! ServCtl->mThreadVec || ! ServCtl->mSockFdVec || ! ServCtl->mEPollFdVec || ! ServCtl->mWakeAsyncVec)
+	if (! ServCtl->mThreadVec || ! ServCtl->mThreadMgmt || ! ServCtl->mSockFdVec || ! ServCtl->mEPollFdVec || ! ServCtl->mWakeAsyncVec)
 		GS_ERR_CLEAN(1);
 
 	ServCtl->mWriteNum = ThreadNum;
@@ -571,6 +598,7 @@ clean:
 		gs_close_cond(&ServCtl->mEvtFdExitReq);
 
 		GS_DELETE_ARRAY(&ServCtl->mThreadVec, pthread_t);
+		GS_DELETE_ARRAY(&ServCtl->mThreadMgmt, pthread_t);
 
 		for (size_t i = 0; i < ServCtl->mSockFdNum; i++)
 			gs_close_cond(ServCtl->mSockFdVec + i);
@@ -620,6 +648,16 @@ int gs_vserv_ctl_create_finish(
 			GS_GOTO_CLEAN();
 		Ctx = NULL;
 		ThreadsInitedCnt++;
+	}
+
+	{
+		GS_ASSERT(ServCtl->mThreadMgmtNum == 1);
+		struct GsVServPthreadCtx *Ctx = new GsVServPthreadCtx();
+		Ctx->mServCtl = ServCtl;
+		Ctx->mSockIdx = -1;
+		if (!!(r = pthread_create(ServCtl->mThreadMgmt + 0, &Attr, gs_vserv_mgmt_receive_func_pthread, Ctx)))
+			GS_GOTO_CLEAN();
+		Ctx = NULL;
 	}
 
 clean:
@@ -676,6 +714,12 @@ int gs_vserv_ctl_quit_wait(struct GsVServCtl *ServCtl)
 clean:
 
 	return r;
+}
+
+/* FIXME: did not want to add this function see if refactor possible */
+struct GsVServCtlCb * gs_vserv_ctl_get_cb(struct GsVServCtl *ServCtl)
+{
+	return ServCtl->mCb;
 }
 
 int gs_vserv_write_create(

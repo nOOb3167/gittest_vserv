@@ -49,6 +49,15 @@ enum GsSockType
 	GS_SOCK_TYPE_WAKE = 4,
 };
 
+/** @sa gs_vserv_receive_func gs_vserv_enet_receive_fun */
+struct GsVServCtlReceiveCb
+{
+	/* ServCtl->mThreadVec threads are made call this on start */
+	int(*CbReceiveFunc)(struct GsVServCtl *ServCtl, size_t SockIdx);
+	/* ServCtl->mThreadMgmt thread is made call this on start */
+	int(*CbReceiveFuncM)(struct GsVServCtl *ServCtl);
+};
+
 struct GsVServCtlCb
 {
 	int(*CbCrank)(struct GsVServCtlCb *Cb, struct GsPacket *Packet, struct GsAddr *Addr, struct GsVServRespond *Respond);
@@ -64,6 +73,11 @@ int gs_vserv_lock_release(struct GsVServLock *Lock);
 size_t gs_addr_rawhash(struct GsAddr *Addr);
 size_t gs_addr_port(struct GsAddr *Addr);
 
+/** @sa GsVServCtlReceiveCb */
+int gs_vserv_receive_func(
+	struct GsVServCtl *ServCtl,
+	size_t SockIdx);
+
 int gs_vserv_ctl_create_part(
 	size_t ThreadNum,
 	int *ioSockFdVec, size_t SockFdNum, /*owned*/
@@ -74,6 +88,7 @@ int gs_vserv_ctl_create_finish(
 int gs_vserv_ctl_destroy(struct GsVServCtl *ServCtl);
 int gs_vserv_ctl_quit_request(struct GsVServCtl *ServCtl);
 int gs_vserv_ctl_quit_wait(struct GsVServCtl *ServCtl);
+struct GsVServCtlCb * gs_vserv_ctl_get_cb(struct GsVServCtl *ServCtl);
 
 int gs_vserv_write_create(
 	struct GsVServWrite **oWrite);

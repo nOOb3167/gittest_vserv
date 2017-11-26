@@ -9,6 +9,7 @@
 
 #include <gittest/misc.h>
 #include <gittest/filesys.h>
+#include <gittest/vserv_enet_priv.h>
 #include <gittest/vserv_net.h>
 
 #define GS_VSERV_USER_ID_INVALID 0xFFFF
@@ -68,6 +69,7 @@ struct GsVServCtlCb0
 {
 	struct GsVServCtlCb base;
 	struct GsVServConExt *mExt; /*owned*/
+	struct GsVServEnet *mEnet;  /*owned*/
 	struct GsVServLock *mLock; /*owned*/
 };
 
@@ -237,6 +239,35 @@ int gs_vserv_user_genid(struct GsVServUser *User, struct GsVServManageId *Manage
 {
 	// FIXME: surely will leak id if old one was not released
 	return gs_vserv_manage_id_genid(ManageId, &User->mId);
+}
+
+int gs_vserv_con_ext_create(
+	struct GsAuxConfigCommonVars *CommonVars,
+	struct GsVServManageId *ManageId, /*owned*/
+	struct GsVServGroupAll *GroupAll, /*owned*/
+	struct GsVServConExt **oExt)
+{
+	int r = 0;
+
+	struct GsVServConExt *Ext = NULL;
+
+	Ext = new GsVServConExt();
+	Ext->mCommonVars = *CommonVars;
+	Ext->mManageId = GS_ARGOWN(&ManageId);
+	Ext->mUsers;      /*dummy*/
+	Ext->mUserIdAddr; /*dummy*/
+	Ext->mGroupAll = sp<GsVServGroupAll>(GS_ARGOWN(&GroupAll), gs_vserv_groupall_destroy);
+
+	if (oExt)
+		*oExt = GS_ARGOWN(&Ext);
+
+clean:
+	GS_DELETE_F(&ManageId, gs_vserv_manage_id_destroy);
+	GS_DELETE_F(&GroupAll, gs_vserv_groupall_destroy);
+	// FIXME:
+	//GS_DELETE_F(&Ext, gs_vserv_con_ext_destroy);
+
+	return r;
 }
 
 int gs_vserv_enqueue_idvec(
@@ -614,8 +645,8 @@ int gs_vserv_start_crank0(struct GsAuxConfigCommonVars *CommonVars)
 	std::vector<int> ServFd;
 	struct GsVServManageId *ManageId = NULL;
 	struct GsVServGroupAll *GroupAll = NULL;
-	struct GsVServConExt *Ext = NULL;
 	struct GsVServCtlCb0 *Cb0 = NULL;
+	struct GsVServCtlReceiveCb ReceiveCb = {};
 	struct GsVServCtl *ServCtl = NULL;
 
 	if (!!(r = gs_vserv_manage_id_create(&ManageId)))
@@ -624,25 +655,33 @@ int gs_vserv_start_crank0(struct GsAuxConfigCommonVars *CommonVars)
 	if (!!(r = gs_vserv_groupall_create(NULL, 0, NULL, 0, &GroupAll)))
 		GS_GOTO_CLEAN();
 
-	Ext = new GsVServConExt();
-	Ext->mCommonVars = *CommonVars;
-	Ext->mManageId = GS_ARGOWN(&ManageId);
-	Ext->mUsers; /*dummy*/
-	Ext->mUserIdAddr; /*dummy*/
-	Ext->mGroupAll = sp<GsVServGroupAll>(GS_ARGOWN(&GroupAll), gs_vserv_groupall_destroy);
+	/* init Cb0 start */
 
 	Cb0 = new GsVServCtlCb0();
 	Cb0->base.CbCrank = gs_vserv_crank0;
 	Cb0->base.CbCrankM = gs_vserv_crankm0;
-	Cb0->mExt = GS_ARGOWN(&Ext);
+	Cb0->mExt = NULL;
+	Cb0->mEnet = NULL;
 	Cb0->mLock = NULL;
+
 	if (!!(r = gs_vserv_lock_create(&Cb0->mLock)))
 		GS_GOTO_CLEAN();
+
+	if (!!(r = gs_vserv_con_ext_create(CommonVars, GS_ARGOWN(&ManageId), GS_ARGOWN(&GroupAll), &Cb0->mExt)))
+		GS_GOTO_CLEAN();
+
+	if (!!(r = gs_vserv_enet_create(CommonVars, &Cb0->base, &Cb0->mEnet)))
+		GS_GOTO_CLEAN();
+
+	/* init Cb0 end */
 
 	ServFd.resize(1, -1);
 
 	if (!!(r = gs_vserv_sockets_create(std::to_string(CommonVars->VServPort).c_str(), ServFd.data(), ServFd.size())))
 		GS_GOTO_CLEAN();
+
+	ReceiveCb.CbReceiveFunc = gs_vserv_receive_func;
+	ReceiveCb.CbReceiveFuncM = gs_vserv_enet_receive_func;
 
 	if (!!(r = gs_vserv_start_2(ServFd.data(), ServFd.size(), &Cb0->base, &ServCtl)))
 		GS_GOTO_CLEAN();
