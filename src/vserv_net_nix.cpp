@@ -26,10 +26,6 @@
 #include <gittest/log.h>
 #include <gittest/vserv_net.h>
 
-#define GS_VSERV_EPOLL_NUMEVENTS 8
-#define GS_VSERV_SEND_NUMIOVEC 3
-#define GS_VSERV_UDP_SIZE_MAX 65535
-
 struct GsVServLock
 {
 	pthread_mutex_t mMutex;
@@ -43,7 +39,7 @@ struct GsVServCtl
 	pthread_t *mThreadMgmt; size_t mThreadMgmtNum;
 	struct GsVServQuitCtl *mQuitCtl;
 	struct GsVServWork *mWork;
-	// FIXME: mCon provides access to what SHOULD be mMgmt via CbGetMgmt()
+	// FIXME: no mMgmt - mCon provides access to what SHOULD be mMgmt via CbGetMgmt() (helper gs_vserv_ctl_get_mgmt())
 	/* shared (work&mgmt) context */
 	struct GsVServCon *mCon; /*notowned*/ // FIXME: needs CbDestroy?
 	struct GsVServWorkCb mWorkCb;
@@ -242,193 +238,6 @@ int gs_eventfd_write(int EvtFd, int Value)
 clean:
 
   return 0;
-}
-
-int gs_vserv_receive_evt_normal(
-	struct GsVServCtl *ServCtl,
-	struct GsEPollCtx *EPollCtx,
-	char *UdpBuf, size_t LenUdp)
-{
-	int r = 0;
-
-	struct GsVServWorkCb *WorkCb = gs_vserv_ctl_get_workcb(ServCtl);
-
-	const int Fd = ServCtl->mSockFdVec[GS_MIN(EPollCtx->mSockIdx, ServCtl->mSockFdNum - 1)];
-	bool DoneReading = 0;
-
-	GS_ASSERT(Fd == EPollCtx->mFd);
-
-	/* remember to read until EAGAIN for edge-triggered epoll (EPOLLET) */
-	while (! DoneReading) {
-		ssize_t NRecv = 0;
-		struct sockaddr_in SockAddr = {};
-		socklen_t SockAddrSize = sizeof SockAddr;
-		struct GsPacket Packet = {};
-		struct GsAddr Addr = {};
-		struct GsVServRespond Respond = {};
-		while (-1 == (NRecv = recvfrom(Fd, UdpBuf, LenUdp, MSG_TRUNC, (struct sockaddr *)&SockAddr, &SockAddrSize))) {
-			if (errno == EINTR)
-				continue;
-			if (errno == EAGAIN || errno == EWOULDBLOCK) {
-				DoneReading = 1;
-				goto donereading;
-			}
-			GS_ERR_CLEAN(1);
-		}
-		/* detect datagram truncation (see MSG_TRUNC) */
-		if (NRecv > LenUdp)
-			GS_ERR_CLEAN(1);
-		/* detect somehow receiving from wrong address family? */
-		if (SockAddrSize != sizeof SockAddr || SockAddr.sin_family != AF_INET)
-			GS_ERR_CLEAN(1);
-		/* dispatch datagram */
-		Packet.data = (uint8_t *)UdpBuf;
-		Packet.dataLength = NRecv;
-		Addr.mSinFamily = SockAddr.sin_family;
-		Addr.mSinPort = ntohs(SockAddr.sin_port);
-		Addr.mSinAddr = ntohl(SockAddr.sin_addr.s_addr);
-		Respond.mServCtl = ServCtl;
-		Respond.mSockIdx = EPollCtx->mSockIdx;
-		if (!!(r = WorkCb->CbCrank(ServCtl, &Packet, &Addr, &Respond)))
-			GS_GOTO_CLEAN();
-	}
-donereading:
-
-clean:
-
-	return r;
-}
-
-int gs_vserv_receive_evt_event(
-	struct GsVServCtl *ServCtl,
-	struct GsEPollCtx *EPollCtx)
-{
-	int r = 0;
-
-	const int Fd = ServCtl->mSockFdVec[GS_MIN(EPollCtx->mSockIdx, ServCtl->mSockFdNum - 1)];
-
-	GS_ASSERT(Fd == EPollCtx->mFd);
-
-	if (!!(r = gs_eventfd_read(Fd)))
-		GS_GOTO_CLEAN();
-
-clean:
-
-	return r;
-}
-
-int gs_vserv_receive_writable(
-	struct GsVServCtl *ServCtl,
-	struct GsEPollCtx *EPollCtx)
-{
-	int r = 0;
-
-	const int Fd = ServCtl->mSockFdVec[GS_MIN(EPollCtx->mSockIdx, ServCtl->mSockFdNum - 1)];
-	struct GsVServWrite *Write = ServCtl->mWriteVec[EPollCtx->mSockIdx];
-
-	GS_ASSERT(Fd == EPollCtx->mFd);
-
-	if (!!(r = gs_vserv_write_drain_to(ServCtl, EPollCtx->mSockIdx, NULL)))
-		GS_GOTO_CLEAN();
-
-clean:
-
-	return r;
-}
-
-int gs_vserv_receive_func(
-	struct GsVServCtl *ServCtl,
-	size_t SockIdx)
-{
-	int r = 0;
-
-	char *UdpBuf = NULL;
-	size_t LenUdp = 0;
-
-	if (!(UdpBuf = (char *)malloc(GS_VSERV_UDP_SIZE_MAX)))
-		GS_ERR_CLEAN(1);
-	LenUdp = GS_VSERV_UDP_SIZE_MAX;
-
-	while (true) {
-		int EPollFd = -1;
-		struct epoll_event Events[GS_VSERV_EPOLL_NUMEVENTS] = {};
-		int NReady = 0;
-
-		EPollFd = ServCtl->mEPollFdVec[SockIdx];
-
-		/* https://lkml.org/lkml/2011/11/17/234
-		     epoll_wait completing on fd registered with MASK
-			 (epoll_ctl(fd,MASK) where MASK is EPOLLIN|EPOLLOUT for example)
-			 will deliver event with full MASK set. consider adding twice with separate mask. */
-
-		while (-1 == (NReady = epoll_wait(EPollFd, Events, GS_VSERV_EPOLL_NUMEVENTS, 100))) {
-			if (errno == EINTR)
-				continue;
-			GS_ERR_CLEAN(1);
-		}
-		if (NReady == 0)
-			continue;
-
-		for (int i = 0; i < NReady; i++) {
-			struct GsEPollCtx *EPollCtx = (struct GsEPollCtx *) Events[i].data.ptr;
-
-			GS_ASSERT(EPollCtx->mServCtl == ServCtl);
-
-			if (Events[i].events & EPOLLIN) {
-				switch (EPollCtx->mType)
-				{
-
-				case GS_SOCK_TYPE_NORMAL:
-				{
-					if (!!(r = gs_vserv_receive_evt_normal(EPollCtx->mServCtl, EPollCtx, UdpBuf, LenUdp)))
-						GS_GOTO_CLEAN();
-					if (!!(r = gs_vserv_receive_writable(EPollCtx->mServCtl, EPollCtx)))
-						GS_GOTO_CLEAN();
-				}
-				break;
-
-				case GS_SOCK_TYPE_EVENT:
-				{
-					if (!!(r = gs_vserv_receive_evt_event(EPollCtx->mServCtl, EPollCtx)))
-						GS_GOTO_CLEAN();
-					GS_ERR_NO_CLEAN(0);
-				}
-				break;
-
-				case GS_SOCK_TYPE_WAKE:
-				{
-					// FIXME: not implemented yet
-					GS_ASSERT(0);
-				}
-				break;
-
-				default:
-					GS_ASSERT(0);
-
-				}
-			}
-			if (Events[i].events & EPOLLOUT) {
-				switch (EPollCtx->mType)
-				{
-
-				case GS_SOCK_TYPE_NORMAL:
-				{
-					if (!!(r = gs_vserv_receive_writable(EPollCtx->mServCtl, EPollCtx)))
-						GS_GOTO_CLEAN();
-				}
-				break;
-
-				}
-			}
-		}
-	}
-
-noclean:
-
-clean:
-	free(UdpBuf);
-
-	return r;
 }
 
 void * gs_vserv_work_func_pthread(
@@ -638,6 +447,16 @@ int gs_vserv_ctl_quit_wait(struct GsVServCtl *ServCtl)
 clean:
 
 	return r;
+}
+
+struct GsVServWork * gs_vserv_ctl_get_work(struct GsVServCtl *ServCtl)
+{
+	return ServCtl->mWork;
+}
+
+struct GsVServMgmt * gs_vserv_ctl_get_mgmt(struct GsVServCtl *ServCtl)
+{
+	return ServCtl->mCon->CbGetMgmt(ServCtl->mCon);
 }
 
 struct GsVServCon * gs_vserv_ctl_get_con(struct GsVServCtl *ServCtl)

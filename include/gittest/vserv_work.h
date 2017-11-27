@@ -8,6 +8,9 @@
 #include <gittest/misc.h>
 #include <gittest/vserv_net.h>
 
+#define GS_VSERV_EPOLL_NUMEVENTS 8
+#define GS_VSERV_UDP_SIZE_MAX 65535
+
 struct GsVServRespond
 {
 	struct GsVServCtl *mServCtl;
@@ -49,6 +52,10 @@ struct GsEPollCtx
 	size_t mSockIdx;
 	size_t mFd; /*notowned - informative*/
 };
+
+int gs_vserv_receive_func(
+	struct GsVServCtl *ServCtl,
+	size_t SockIdx);
 
 int gs_vserv_work_create(
 	size_t ThreadNum,

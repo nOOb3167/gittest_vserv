@@ -64,7 +64,6 @@ struct GsVServWorkCb
 	int(*CbCrank)(struct GsVServCtl *ServCtl, struct GsPacket *Packet, struct GsAddr *Addr, struct GsVServRespond *Respond);
 };
 
-/** @sa gs_vserv_receive_func gs_vserv_enet_receive_func */
 struct GsVServMgmtCb
 {
 	/* ServCtl->mThreadMgmt thread is made call this on start */
@@ -92,11 +91,6 @@ int gs_vserv_lock_release(struct GsVServLock *Lock);
 size_t gs_addr_rawhash(struct GsAddr *Addr);
 size_t gs_addr_port(struct GsAddr *Addr);
 
-/** @sa GsVServCtlReceiveCb */
-int gs_vserv_receive_func(
-	struct GsVServCtl *ServCtl,
-	size_t SockIdx);
-
 int gs_vserv_ctl_create_part(
 	size_t ThreadNum,
 	struct GsVServCon *Con, /*owned*/
@@ -110,6 +104,8 @@ int gs_vserv_ctl_create_finish(
 int gs_vserv_ctl_destroy(struct GsVServCtl *ServCtl);
 int gs_vserv_ctl_quit_request(struct GsVServCtl *ServCtl);
 int gs_vserv_ctl_quit_wait(struct GsVServCtl *ServCtl);
+struct GsVServWork *   gs_vserv_ctl_get_work(struct GsVServCtl *ServCtl);
+struct GsVServMgmt *   gs_vserv_ctl_get_mgmt(struct GsVServCtl *ServCtl);
 struct GsVServCon *    gs_vserv_ctl_get_con(struct GsVServCtl *ServCtl);
 struct GsVServWorkCb * gs_vserv_ctl_get_workcb(struct GsVServCtl *ServCtl);
 struct GsVServMgmtCb * gs_vserv_ctl_get_mgmtcb(struct GsVServCtl *ServCtl);
