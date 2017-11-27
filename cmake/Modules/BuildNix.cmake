@@ -1,8 +1,9 @@
 # gittest_vserv
 
 SET(GITTEST_VSERV_HEADERS
-  include/gittest/vserv_helpers.h
+  include/gittest/vserv_crank0_priv.h
   include/gittest/vserv_enet_priv.h
+  include/gittest/vserv_helpers.h
   include/gittest/vserv_net.h
   ${GITTEST_LIB_HEADERS}
 )

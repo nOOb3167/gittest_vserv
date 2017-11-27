@@ -5,6 +5,7 @@
 #include <gittest/misc.h>
 #include <gittest/config.h>
 #include <gittest/vserv_net.h>
+#include <gittest/vserv_crank0_priv.h>
 #include <gittest/vserv_enet_priv.h>
 
 #define GS_VSERV_ENET_ARBITRARY_CLIENT_MAX 128
@@ -17,19 +18,18 @@ unsigned long long gs_vserv_enet_addr_host_to_gs_addr_host(uint32_t EnetAddrHost
 }
 
 // FIXME: should be in the public header really
-int gs_vserv_enet_init()
+int gs_vserv_mgmt_init()
 {
 	return !! enet_initialize();
 }
 
-int gs_vserv_enet_create(
+int gs_vserv_mgmt_create(
 	struct GsAuxConfigCommonVars *CommonVars,
-	struct GsVServCtlCb *Cb,
-	struct GsVServEnet **oEnet)
+	struct GsVServMgmt **oMgmt)
 {
 	int r = 0;
 
-	struct GsVServEnet *Enet = NULL;
+	struct GsVServMgmt *Mgmt = NULL;
 
 	ENetAddress Addr = {};
 	ENetHost *Host = NULL;
@@ -44,33 +44,35 @@ int gs_vserv_enet_create(
 	if (!(Host = enet_host_create(&Addr, GS_VSERV_ENET_ARBITRARY_CLIENT_MAX, 1, 0, 0)))
 		GS_ERR_CLEAN(1);
 
-	Enet = new GsVServEnet();
-	Enet->mCb = Cb;
-	Enet->mAddr = Addr;
-	Enet->mHost = GS_ARGOWN(&Host);
+	Mgmt = new GsVServMgmt();
+	Mgmt->mAddr = Addr;
+	Mgmt->mHost = GS_ARGOWN(&Host);
+
+	if (oMgmt)
+		*oMgmt = GS_ARGOWN(&Mgmt);
 
 clean:
 	enet_host_destroy(Host);
-	GS_DELETE(&Enet, struct GsVServEnet);
+	GS_DELETE(&Mgmt, struct GsVServMgmt);
 
 	return r;
 }
 
-int gs_vserv_enet_destroy(struct GsVServEnet *Enet)
+int gs_vserv_mgmt_destroy(struct GsVServMgmt *Mgmt)
 {
-	GS_DELETE(&Enet, struct GsVServEnet);
+	GS_DELETE(&Mgmt, struct GsVServMgmt);
 	return 0;
 }
 
 /** designed to be called on separate thread after GsVServEnet creation */
-int gs_vserv_enet_receive_func(
+int gs_vserv_mgmt_receive_func(
 	struct GsVServCtl *ServCtl)
 {
 	int r = 0;
 
-	struct GsVServCtlCb *XCb = gs_vserv_ctl_get_cb(ServCtl);
-	struct GsVServCtlCb0 *XCb0 = (struct GsVServCtlCb0 *) XCb;
-	struct GsVServEnet *Enet = XCb0->mEnet;
+	struct GsVServConExt *Ext = (struct GsVServConExt *) gs_vserv_ctl_get_con(ServCtl);
+	struct GsVServMgmtCb *MgmtCb = (struct GsVServMgmtCb *) gs_vserv_ctl_get_mgmtcb(ServCtl);
+	struct GsVServMgmt *Mgmt = gs_vserv_con_ext_getmgmt(&Ext->base);
 
 	const size_t TimeoutGenerationMax = 4; /* [0,4] interval */
 	uint32_t TimeoutGenerationVec[]    = { 1,  5,  10, 20,  500 };
@@ -84,7 +86,7 @@ int gs_vserv_enet_receive_func(
 	while (true) {
 		ENetEvent Evt = {};
 
-		if (0 > (HostServiceRet = enet_host_service(Enet->mHost, &Evt, TimeoutGenerationVec[TimeoutGeneration])))
+		if (0 > (HostServiceRet = enet_host_service(Mgmt->mHost, &Evt, TimeoutGenerationVec[TimeoutGeneration])))
 			GS_ERR_CLEAN(1);
 
 		/* timeout - if too many, switch to next timeout generation */
@@ -119,9 +121,9 @@ int gs_vserv_enet_receive_func(
 			Addr.mSinAddr = gs_vserv_enet_addr_host_to_gs_addr_host(Evt.peer->address.host);
 			Packet.data = Evt.packet->data;
 			Packet.dataLength = Evt.packet->dataLength;
-			Respond.mEnet = Enet;
+			Respond.mMgmt = Mgmt;
 			Respond.mPeer = Evt.peer;
-			if (!!(r = Enet->mCb->CbCrankM(Enet->mCb, &Packet, &Addr, &Respond)))
+			if (!!(r = MgmtCb->CbCrankM(ServCtl, &Packet, &Addr, &Respond)))
 				GS_GOTO_CLEAN_J(receive);
 
 		clean_receive:

@@ -16,6 +16,7 @@
 #define GS_ADDR_RAWHASH_BUCKET(RAWHASH, NUM_BUCKETS) ((RAWHASH) % (NUM_BUCKETS))
 
 /* intended to be forward-declared in header (API use pointer only) */
+struct GsVServMgmt;
 struct GsVServLock;
 struct GsVServCtl;
 struct GsVServRespond;
@@ -49,19 +50,26 @@ enum GsSockType
 	GS_SOCK_TYPE_WAKE = 4,
 };
 
-/** @sa gs_vserv_receive_func gs_vserv_enet_receive_fun */
-struct GsVServCtlReceiveCb
+struct GsVServCon
 {
-	/* ServCtl->mThreadVec threads are made call this on start */
-	int(*CbReceiveFunc)(struct GsVServCtl *ServCtl, size_t SockIdx);
-	/* ServCtl->mThreadMgmt thread is made call this on start */
-	int(*CbReceiveFuncM)(struct GsVServCtl *ServCtl);
+	struct GsVServMgmt * (*CbGetMgmt)(struct GsVServCon *Base);
 };
 
-struct GsVServCtlCb
+struct GsVServWorkCb
 {
-	int(*CbCrank)(struct GsVServCtlCb *Cb, struct GsPacket *Packet, struct GsAddr *Addr, struct GsVServRespond *Respond);
-	int(*CbCrankM)(struct GsVServCtlCb *Cb, struct GsPacket *Packet, struct GsAddr *Addr, struct GsVServRespondM *Respond);
+	/* ServCtl->mThreadVec threads are made call this on start */
+	int(*CbThreadFunc)(struct GsVServCtl *ServCtl, size_t SockIdx);
+	/* called per-request */
+	int(*CbCrank)(struct GsVServCtl *ServCtl, struct GsPacket *Packet, struct GsAddr *Addr, struct GsVServRespond *Respond);
+};
+
+/** @sa gs_vserv_receive_func gs_vserv_enet_receive_func */
+struct GsVServMgmtCb
+{
+	/* ServCtl->mThreadMgmt thread is made call this on start */
+	int(*CbThreadFuncM)(struct GsVServCtl *ServCtl);
+	/* called per-request */
+	int(*CbCrankM)(struct GsVServCtl *ServCtl, struct GsPacket *Packet, struct GsAddr *Addr, struct GsVServRespondM *Respond);
 };
 
 int gs_vserv_lock_create(struct GsVServLock **oLock);
@@ -80,15 +88,19 @@ int gs_vserv_receive_func(
 
 int gs_vserv_ctl_create_part(
 	size_t ThreadNum,
-	int *ioSockFdVec, size_t SockFdNum, /*owned*/
-	struct GsVServCtlCb *Cb,
+	int *ioSockFdVec, size_t SockFdNum, /*owned/stealing*/
+	struct GsVServCon *Con, /*owned*/
+	struct GsVServWorkCb WorkCb,
+	struct GsVServMgmtCb MgmtCb,
 	struct GsVServCtl **oServCtl);
 int gs_vserv_ctl_create_finish(
 	struct GsVServCtl *ServCtl);
 int gs_vserv_ctl_destroy(struct GsVServCtl *ServCtl);
 int gs_vserv_ctl_quit_request(struct GsVServCtl *ServCtl);
 int gs_vserv_ctl_quit_wait(struct GsVServCtl *ServCtl);
-struct GsVServCtlCb * gs_vserv_ctl_get_cb(struct GsVServCtl *ServCtl);
+struct GsVServCon *    gs_vserv_ctl_get_con(struct GsVServCtl *ServCtl);
+struct GsVServWorkCb * gs_vserv_ctl_get_workcb(struct GsVServCtl *ServCtl);
+struct GsVServMgmtCb * gs_vserv_ctl_get_mgmtcb(struct GsVServCtl *ServCtl);
 
 int gs_vserv_write_create(
 	struct GsVServWrite **oWrite);
@@ -112,7 +124,9 @@ int gs_vserv_sockets_create(
 
 int gs_vserv_start_2(
 	int *ServFdVec, size_t ServFdNum, /*owned/stealing*/
-	struct GsVServCtlCb *Cb,
+	struct GsVServCon *Con, /*owned*/
+	struct GsVServWorkCb WorkCb,
+	struct GsVServMgmtCb MgmtCb,
 	struct GsVServCtl **oServCtl);
 
 /**/

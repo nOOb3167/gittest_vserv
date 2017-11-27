@@ -6,28 +6,26 @@
 #include <gittest/misc.h>
 #include <gittest/vserv_net.h>
 
-struct GsVServEnet
+struct GsVServMgmt
 {
 	struct GsAuxConfigCommonVars CommonVars;
-	struct GsVServCtlCb *mCb; /*notowned*/
 	ENetAddress mAddr;
 	ENetHost *mHost;
 };
 
 struct GsVServRespondM
 {
-	struct GsVServEnet *mEnet;
+	struct GsVServMgmt *mMgmt;
 	ENetPeer *mPeer;
 };
 
-int gs_vserv_enet_init();
-int gs_vserv_enet_create(
+int gs_vserv_mgmt_init();
+int gs_vserv_mgmt_create(
 	struct GsAuxConfigCommonVars *CommonVars,
-	struct GsVServCtlCb *Cb,
-	struct GsVServEnet **oEnet);
-int gs_vserv_enet_destroy(struct GsVServEnet *Enet);
+	struct GsVServMgmt **oMgmt);
+int gs_vserv_mgmt_destroy(struct GsVServMgmt *Mgmt);
 /*interface*/
-int gs_vserv_enet_receive_func(
+int gs_vserv_mgmt_receive_func(
 	struct GsVServCtl *ServCtl);
 
 #endif /* _VSERV_ENET_PRIV_H_ */

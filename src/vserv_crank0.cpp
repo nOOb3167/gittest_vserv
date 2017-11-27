@@ -11,67 +11,7 @@
 #include <gittest/filesys.h>
 #include <gittest/vserv_enet_priv.h>
 #include <gittest/vserv_net.h>
-
-#define GS_VSERV_USER_ID_INVALID 0xFFFF
-#define GS_VSERV_USER_ID_SERVFILL 0xFFFF
-
-#define GS_VSERV_NAMELEN_ARBITRARY_SIZE_MAX 1472
-
-typedef uint8_t gs_vserv_group_mode_t;
-typedef uint16_t gs_vserv_user_id_t;
-
-enum GsVServCmd {
-	GS_VSERV_CMD_BROADCAST = 'b',
-	GS_VSERV_M_CMD_GROUPSET = 's',
-	GS_VSERV_CMD_GROUP_MODE_MSG = 'm',
-	GS_VSERV_CMD_IDENT = 'i',
-	GS_VSERV_CMD_IDENT_ACK = 'I',
-	GS_VSERV_CMD_NAMEGET = 'n',
-	GS_VSERV_CMD_NAMES = 'N',
-};
-
-enum GsVServGroupMode
-{
-	GS_VSERV_GROUP_MODE_NONE = 0,
-	GS_VSERV_GROUP_MODE_S = 's',
-};
-
-struct GsVServManageId
-{
-	std::set<gs_vserv_user_id_t> mTaken;
-	size_t mCounter;
-};
-
-struct GsVServGroupAll
-{
-	gs_vserv_user_id_t *mIdVec; size_t mIdNum;
-	uint16_t *mSizeVec; size_t mSizeNum;
-	std::map<gs_vserv_user_id_t, std::pair<gs_vserv_user_id_t *, uint16_t> > mCacheIdGroup;
-};
-
-struct GsVServUser
-{
-	uint8_t *mNameBuf; size_t mLenName;
-	uint8_t *mServBuf; size_t mLenServ;
-	gs_vserv_user_id_t mId;
-};
-
-struct GsVServConExt
-{
-	struct GsAuxConfigCommonVars mCommonVars; /*notowned*/
-	struct GsVServManageId *mManageId;
-	std::map<GsAddr, sp<GsVServUser>, gs_addr_less_t> mUsers;
-	std::map<gs_vserv_user_id_t, GsAddr> mUserIdAddr;
-	sp<GsVServGroupAll> mGroupAll;
-};
-
-struct GsVServCtlCb0
-{
-	struct GsVServCtlCb base;
-	struct GsVServConExt *mExt; /*owned*/
-	struct GsVServEnet *mEnet;  /*owned*/
-	struct GsVServLock *mLock; /*owned*/
-};
+#include <gittest/vserv_crank0_priv.h>
 
 int gs_vserv_manage_id_create(struct GsVServManageId **oManageId)
 {
@@ -252,11 +192,20 @@ int gs_vserv_con_ext_create(
 	struct GsVServConExt *Ext = NULL;
 
 	Ext = new GsVServConExt();
+	Ext->base.CbGetMgmt = gs_vserv_con_ext_getmgmt;
 	Ext->mCommonVars = *CommonVars;
 	Ext->mManageId = GS_ARGOWN(&ManageId);
 	Ext->mUsers;      /*dummy*/
 	Ext->mUserIdAddr; /*dummy*/
 	Ext->mGroupAll = sp<GsVServGroupAll>(GS_ARGOWN(&GroupAll), gs_vserv_groupall_destroy);
+	Ext->mEnet = NULL;
+	Ext->mLock = NULL;
+
+	if (!!(r = gs_vserv_enet_create(CommonVars, &Ext->mEnet)))
+		GS_GOTO_CLEAN();
+
+	if (!!(r = gs_vserv_lock_create(&Ext->mLock)))
+		GS_GOTO_CLEAN();
 
 	if (oExt)
 		*oExt = GS_ARGOWN(&Ext);
@@ -268,6 +217,12 @@ clean:
 	//GS_DELETE_F(&Ext, gs_vserv_con_ext_destroy);
 
 	return r;
+}
+
+struct GsVServMgmt * gs_vserv_con_ext_getmgmt(struct GsVServCon *Base)
+{
+	struct GsVServConExt *Ext = (struct GsVServConExt *) Base;
+	return Ext->mMgmt;
 }
 
 int gs_vserv_enqueue_idvec(
@@ -300,16 +255,15 @@ clean:
 	return r;
 }
 
-int gs_vserv_crank0(struct GsVServCtlCb *Cb, struct GsPacket *Packet, struct GsAddr *Addr, struct GsVServRespond *Respond)
+int gs_vserv_crank0(struct GsVServCtl *ServCtl, struct GsPacket *Packet, struct GsAddr *Addr, struct GsVServRespond *Respond)
 {
 	int r = 0;
 
-	struct GsVServCtlCb0 *Cb0 = (struct GsVServCtlCb0 *) Cb;
-	struct GsVServConExt *Ext = Cb0->mExt;
+	struct GsVServConExt *Ext = (struct GsVServConExt *) gs_vserv_ctl_get_con(ServCtl);
 
 	sp<GsVServUser> User;
 
-	if (!!(r = gs_vserv_lock_lock(Cb0->mLock)))
+	if (!!(r = gs_vserv_lock_lock(Ext->mLock)))
 		GS_GOTO_CLEAN();
 
 	GS_LOG(I, PF, "pkt [%d]", (int)Packet->dataLength);
@@ -617,23 +571,22 @@ int gs_vserv_crank0(struct GsVServCtlCb *Cb, struct GsPacket *Packet, struct GsA
 	}
 
 clean:
-	GS_RELEASE_F(Cb0->mLock, gs_vserv_lock_release);
+	GS_RELEASE_F(Ext->mLock, gs_vserv_lock_release);
 
 	return r;
 }
 
-int gs_vserv_crankm0(struct GsVServCtlCb *Cb, struct GsPacket *Packet, struct GsAddr *Addr, struct GsVServRespondM *Respond)
+int gs_vserv_crankm0(struct GsVServCtl *ServCtl, struct GsPacket *Packet, struct GsAddr *Addr, struct GsVServRespondM *Respond)
 {
 	int r = 0;
 
-	struct GsVServCtlCb0 *Cb0 = (struct GsVServCtlCb0 *) Cb;
-	struct GsVServConExt *Ext = Cb0->mExt;
+	struct GsVServConExt *Ext = (struct GsVServConExt *) gs_vserv_ctl_get_con(ServCtl);
 
-	if (!!(r = gs_vserv_lock_lock(Cb0->mLock)))
+	if (!!(r = gs_vserv_lock_lock(Ext->mLock)))
 		GS_GOTO_CLEAN();
 
 clean:
-	GS_RELEASE_F(Cb0->mLock, gs_vserv_lock_release);
+	GS_RELEASE_F(Ext->mLock, gs_vserv_lock_release);
 
 	return r;
 }
@@ -645,9 +598,16 @@ int gs_vserv_start_crank0(struct GsAuxConfigCommonVars *CommonVars)
 	std::vector<int> ServFd;
 	struct GsVServManageId *ManageId = NULL;
 	struct GsVServGroupAll *GroupAll = NULL;
-	struct GsVServCtlCb0 *Cb0 = NULL;
-	struct GsVServCtlReceiveCb ReceiveCb = {};
+	struct GsVServConExt *Ext = NULL;
+	struct GsVServWorkCb WorkCb = {};
+	struct GsVServMgmtCb MgmtCb = {};
 	struct GsVServCtl *ServCtl = NULL;
+
+	WorkCb.CbThreadFunc = gs_vserv_receive_func;
+	WorkCb.CbCrank = gs_vserv_crank0;
+
+	MgmtCb.CbThreadFuncM = gs_vserv_enet_receive_func;
+	MgmtCb.CbCrankM = gs_vserv_crankm0;
 
 	if (!!(r = gs_vserv_manage_id_create(&ManageId)))
 		GS_GOTO_CLEAN();
@@ -655,35 +615,18 @@ int gs_vserv_start_crank0(struct GsAuxConfigCommonVars *CommonVars)
 	if (!!(r = gs_vserv_groupall_create(NULL, 0, NULL, 0, &GroupAll)))
 		GS_GOTO_CLEAN();
 
-	/* init Cb0 start */
-
-	Cb0 = new GsVServCtlCb0();
-	Cb0->base.CbCrank = gs_vserv_crank0;
-	Cb0->base.CbCrankM = gs_vserv_crankm0;
-	Cb0->mExt = NULL;
-	Cb0->mEnet = NULL;
-	Cb0->mLock = NULL;
-
-	if (!!(r = gs_vserv_lock_create(&Cb0->mLock)))
+	if (!!(r = gs_vserv_con_ext_create(CommonVars, GS_ARGOWN(&ManageId), GS_ARGOWN(&GroupAll), &Ext)))
 		GS_GOTO_CLEAN();
 
-	if (!!(r = gs_vserv_con_ext_create(CommonVars, GS_ARGOWN(&ManageId), GS_ARGOWN(&GroupAll), &Cb0->mExt)))
-		GS_GOTO_CLEAN();
-
-	if (!!(r = gs_vserv_enet_create(CommonVars, &Cb0->base, &Cb0->mEnet)))
-		GS_GOTO_CLEAN();
-
-	/* init Cb0 end */
+	/* socket FD creation split and pushed upwards from gs_vserv_start_2 / ServCtl creation.
+	   prep work for future systemd integration (socket activation receives FD from outside) */
 
 	ServFd.resize(1, -1);
 
 	if (!!(r = gs_vserv_sockets_create(std::to_string(CommonVars->VServPort).c_str(), ServFd.data(), ServFd.size())))
 		GS_GOTO_CLEAN();
 
-	ReceiveCb.CbReceiveFunc = gs_vserv_receive_func;
-	ReceiveCb.CbReceiveFuncM = gs_vserv_enet_receive_func;
-
-	if (!!(r = gs_vserv_start_2(ServFd.data(), ServFd.size(), &Cb0->base, &ServCtl)))
+	if (!!(r = gs_vserv_start_2(ServFd.data(), ServFd.size(), GS_BASE_ARGOWN(&Ext), WorkCb, MgmtCb, &ServCtl)))
 		GS_GOTO_CLEAN();
 
 	if (!!(r = gs_vserv_ctl_quit_wait(ServCtl)))

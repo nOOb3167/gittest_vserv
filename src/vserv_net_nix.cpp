@@ -36,19 +36,27 @@ struct GsVServLock
 	bool mHaveLock;
 };
 
+struct GsVServWork
+{
+	int *mSockFdVec; size_t mSockFdNum;
+	int *mEPollFdVec; size_t mEPollFdNum;
+	struct GsVServWrite **mWriteVec; size_t mWriteNum;
+	int *mWakeAsyncVec; size_t mWakeAsyncNum;
+};
+
 struct GsVServCtl
 {
 	size_t mNumThread;
 	pthread_t *mThreadVec; size_t mThreadNum;
 	pthread_t *mThreadMgmt; size_t mThreadMgmtNum;
-	int *mSockFdVec; size_t mSockFdNum;
-	int *mEPollFdVec; size_t mEPollFdNum;
-	struct GsVServWrite **mWriteVec; size_t mWriteNum;
-	int *mWakeAsyncVec; size_t mWakeAsyncNum;
 	int mEvtFdExitReq;
 	int mEvtFdExit;
-	struct GsVServCtlCb *mCb;
-	struct GsVServCtlReceiveCb mReceiveCb;
+	struct GsVServWork *mWork;
+	// FIXME: mCon provides access to what SHOULD be mMgmt via CbGetMgmt()
+	/* shared (work&mgmt) context */
+	struct GsVServCon *mCon; /*notowned*/ // FIXME: needs CbDestroy?
+	struct GsVServWorkCb mWorkCb;
+	struct GsVServMgmtCb mMgmtCb;
 };
 
 struct GsVServPthreadCtx
@@ -255,6 +263,8 @@ int gs_vserv_receive_evt_normal(
 {
 	int r = 0;
 
+	struct GsVServWorkCb *WorkCb = gs_vserv_ctl_get_workcb(ServCtl);
+
 	const int Fd = ServCtl->mSockFdVec[GS_MIN(EPollCtx->mSockIdx, ServCtl->mSockFdNum - 1)];
 	bool DoneReading = 0;
 
@@ -291,7 +301,7 @@ int gs_vserv_receive_evt_normal(
 		Addr.mSinAddr = ntohl(SockAddr.sin_addr.s_addr);
 		Respond.mServCtl = ServCtl;
 		Respond.mSockIdx = EPollCtx->mSockIdx;
-		if (!!(r = ServCtl->mCb->CbCrank(ServCtl->mCb, &Packet, &Addr, &Respond)))
+		if (!!(r = WorkCb->CbCrank(ServCtl, &Packet, &Addr, &Respond)))
 			GS_GOTO_CLEAN();
 	}
 donereading:
@@ -444,7 +454,7 @@ void * gs_vserv_receive_func_pthread(
 
 	log_guard_t Log(GS_LOG_GET("serv"));
 
-	if (!!(r = Ctx->CbReceiveFunc(ServCtl, SockIdx)))
+	if (!!(r = ServCtl->mWorkCb.CbThreadFunc(ServCtl, SockIdx)))
 		GS_GOTO_CLEAN();
 
 clean:
@@ -468,7 +478,7 @@ void * gs_vserv_mgmt_receive_func_pthread(
 
 	log_guard_t Log(GS_LOG_GET("mgmt"));
 
-	if (!!(r = Ctx->CbReceiveFuncM(ServCtl)))
+	if (!!(r = ServCtl->mMgmtCb.CbThreadFuncM(ServCtl)))
 		GS_GOTO_CLEAN();
 
 clean:
@@ -519,108 +529,98 @@ clean:
 int gs_vserv_ctl_create_part(
 	size_t ThreadNum,
 	int *ioSockFdVec, size_t SockFdNum, /*owned/stealing*/
-	struct GsVServCtlCb *Cb,
+	struct GsVServCon *Con, /*owned*/
+	struct GsVServWorkCb WorkCb,
+	struct GsVServMgmtCb MgmtCb,
 	struct GsVServCtl **oServCtl)
 {
 	int r = 0;
 
-	struct GsVServCtl *ServCtl = new GsVServCtl();
+	struct GsVServCtl *ServCtl = NULL;
 
-	*ServCtl = {};
-	ServCtl->mNumThread = ThreadNum;
-	ServCtl->mThreadNum = ThreadNum;
-	ServCtl->mThreadVec = new pthread_t[ThreadNum];
-	ServCtl->mThreadMgmtNum = 1;
-	ServCtl->mThreadMgmt = new pthread_t[1];
-	ServCtl->mSockFdNum = ThreadNum;
-	ServCtl->mSockFdVec = new int[ThreadNum];
-	for (size_t i = 0; i < ThreadNum; i++)
-		ServCtl->mSockFdVec[i] = GS_FDOWN(&ioSockFdVec[i]);
-	ServCtl->mEPollFdNum = ThreadNum;
-	ServCtl->mEPollFdVec = new int[ThreadNum];
-	for (size_t i = 0; i < ThreadNum; i++)
-		ServCtl->mEPollFdVec[i] = -1;
-	ServCtl->mWakeAsyncNum = ThreadNum;
-	ServCtl->mWakeAsyncVec = new int[ThreadNum];
-	for (size_t i = 0; i < ThreadNum; i++)
-		ServCtl->mWakeAsyncVec[i] = -1;
-	if (! ServCtl->mThreadVec || ! ServCtl->mThreadMgmt || ! ServCtl->mSockFdVec || ! ServCtl->mEPollFdVec || ! ServCtl->mWakeAsyncVec)
-		GS_ERR_CLEAN(1);
+	struct GsVServWork *Work = NULL;
 
-	ServCtl->mWriteNum = ThreadNum;
-	ServCtl->mWriteVec = new GsVServWrite *[ThreadNum];
-	for (size_t i = 0; i < ThreadNum; i++)
-		if (!!(r = gs_vserv_write_create(&ServCtl->mWriteVec[i])))
-			GS_GOTO_CLEAN();
+	int EvtFdExitReq = -1;
+	int EvtFdExit = -1;
 
 	// thread requesting exit 0 -> 1 -> 0
-	if (-1 == (ServCtl->mEvtFdExitReq = eventfd(0, EFD_CLOEXEC | EFD_SEMAPHORE)))
+	if (-1 == (EvtFdExitReq = eventfd(0, EFD_CLOEXEC | EFD_SEMAPHORE)))
 		GS_ERR_CLEAN(1);
 	// controller (servctl) ordering exit 0 -> NumThread -> -=1 -> .. -> 0
-	if (-1 == (ServCtl->mEvtFdExit = eventfd(0, EFD_CLOEXEC | EFD_SEMAPHORE)))
+	if (-1 == (EvtFdExit = eventfd(0, EFD_CLOEXEC | EFD_SEMAPHORE)))
 		GS_ERR_CLEAN(1);
 
-	/* meant to interrupt a sleeping worker (inside ex epoll_wait) */
+	Work = new GsVServWork();
+	Work->mSockFdNum = ThreadNum;
+	Work->mSockFdVec = new int[ThreadNum];
+	for (size_t i = 0; i < ThreadNum; i++)
+		Work->mSockFdVec[i] = GS_FDOWN(&ioSockFdVec[i]);
+	Work->mEPollFdNum = ThreadNum;
+	Work->mEPollFdVec = new int[ThreadNum];
+	for (size_t i = 0; i < ThreadNum; i++)
+		Work->mEPollFdVec[i] = -1;
+	Work->mWakeAsyncNum = ThreadNum;
+	Work->mWakeAsyncVec = new int[ThreadNum];
+	for (size_t i = 0; i < ThreadNum; i++)
+		Work->mWakeAsyncVec[i] = -1;
 
-	for (size_t i = 0; i < ThreadNum; i++) {
-		if (-1 == (ServCtl->mWakeAsyncVec[i] = eventfd(0, EFD_CLOEXEC | EFD_SEMAPHORE)))
-			GS_ERR_CLEAN(1);
-	}
+	if (! Work->mSockFdVec || ! Work->mEPollFdVec || ! Work->mWakeAsyncVec)
+		GS_ERR_CLEAN(1);
+
+	Work->mWriteNum = ThreadNum;
+	Work->mWriteVec = new GsVServWrite *[ThreadNum];
+	for (size_t i = 0; i < ThreadNum; i++)
+		if (!!(r = gs_vserv_write_create(&Work->mWriteVec[i])))
+			GS_GOTO_CLEAN();
 
 	/* create epoll sets */
 
 	for (size_t i = 0; i < ThreadNum; i++)
-		if (-1 == (ServCtl->mEPollFdVec[i] = epoll_create1(EPOLL_CLOEXEC)))
+		if (-1 == (Work->mEPollFdVec[i] = epoll_create1(EPOLL_CLOEXEC)))
 			GS_ERR_CLEAN(1);
 
 	/* add socks, exit, wake events to epoll sets */
 
 	for (size_t i = 0; i < ThreadNum; i++) {
-		if (!!(r = gs_vserv_epollctx_add_for(ServCtl->mEPollFdVec[i], -1, ServCtl->mEvtFdExit, GS_SOCK_TYPE_EVENT, ServCtl)))
+		if (!!(r = gs_vserv_epollctx_add_for(Work->mEPollFdVec[i], -1, EvtFdExit, GS_SOCK_TYPE_EVENT, ServCtl)))
 			GS_GOTO_CLEAN();
 		GS_ASSERT(ThreadNum == SockFdNum);
-		if (!!(r = gs_vserv_epollctx_add_for(ServCtl->mEPollFdVec[i], i, ServCtl->mSockFdVec[i], GS_SOCK_TYPE_NORMAL, ServCtl)))
+		if (!!(r = gs_vserv_epollctx_add_for(Work->mEPollFdVec[i], i, Work->mSockFdVec[i], GS_SOCK_TYPE_NORMAL, ServCtl)))
 			GS_GOTO_CLEAN();
-		if (!!(r = gs_vserv_epollctx_add_for(ServCtl->mEPollFdVec[i], -1, ServCtl->mWakeAsyncVec[i], GS_SOCK_TYPE_WAKE, ServCtl)))
+		if (!!(r = gs_vserv_epollctx_add_for(Work->mEPollFdVec[i], -1, Work->mWakeAsyncVec[i], GS_SOCK_TYPE_WAKE, ServCtl)))
 			GS_GOTO_CLEAN();
 	}
 
-	/*  */
+	/* meant to interrupt a sleeping worker (inside ex epoll_wait) */
 
-	ServCtl->mCb = Cb;
+	for (size_t i = 0; i < ThreadNum; i++) {
+		if (-1 == (Work->mWakeAsyncVec[i] = eventfd(0, EFD_CLOEXEC | EFD_SEMAPHORE)))
+			GS_ERR_CLEAN(1);
+	}
+
+	ServCtl = new GsVServCtl();
+	ServCtl->mNumThread = ThreadNum;
+	ServCtl->mThreadNum = ThreadNum;
+	ServCtl->mThreadVec = new pthread_t[ThreadNum];
+	ServCtl->mThreadMgmtNum = 1;
+	ServCtl->mThreadMgmt = new pthread_t[1];
+	ServCtl->mWork = GS_ARGOWN(&Work);
+	ServCtl->mCon = GS_ARGOWN(&Con);
+	ServCtl->mWorkCb = WorkCb;
+	ServCtl->mMgmtCb = MgmtCb;
+
+	if (! ServCtl->mThreadVec || ! ServCtl->mThreadMgmt)
+		GS_ERR_CLEAN(1);
 
 	if (oServCtl)
 		*oServCtl = GS_ARGOWN(&ServCtl);
 
 clean:
-	if (ServCtl) {
-		gs_close_cond(&ServCtl->mEvtFdExit);
-		gs_close_cond(&ServCtl->mEvtFdExitReq);
-
-		GS_DELETE_ARRAY(&ServCtl->mThreadVec, pthread_t);
-		GS_DELETE_ARRAY(&ServCtl->mThreadMgmt, pthread_t);
-
-		for (size_t i = 0; i < ServCtl->mSockFdNum; i++)
-			gs_close_cond(ServCtl->mSockFdVec + i);
-		GS_DELETE_ARRAY(&ServCtl->mSockFdVec, int);
-
-		for (size_t i = 0; i < ServCtl->mEPollFdNum; i++)
-			gs_close_cond(ServCtl->mEPollFdVec + i);
-		GS_DELETE_ARRAY(&ServCtl->mEPollFdVec, int);
-
-		for (size_t i = 0; i < ServCtl->mWakeAsyncNum; i++)
-			gs_close_cond(ServCtl->mWakeAsyncVec + i);
-		GS_DELETE_ARRAY(&ServCtl->mWakeAsyncVec, int);
-
-		for (size_t i = 0; i < ServCtl->mWriteNum; i++)
-			GS_DELETE_F(&ServCtl->mWriteVec[i], gs_vserv_write_destroy);
-		GS_DELETE_ARRAY(&ServCtl->mWriteVec, struct GsVServWrite *);
-
-		GS_DELETE(&ServCtl, struct GsVServCtl);
-
-		for (size_t i = 0; i < SockFdNum; i++)
-			gs_close_cond(&ioSockFdVec[i]);
-	}
+	gs_close_cond(&EvtFdExit);
+	gs_close_cond(&EvtFdExitReq);
+	GS_DELETE_F(&ServCtl, gs_vserv_ctl_destroy);
+	for (size_t i = 0; i < SockFdNum; i++)
+		gs_close_cond(&ioSockFdVec[i]);
 
 	return r;
 }
@@ -672,9 +672,33 @@ int gs_vserv_ctl_destroy(struct GsVServCtl *ServCtl)
 {
 	int r = 0;
 
-	// FIXME: incomplete (destroy members)
-
 	if (ServCtl) {
+		GS_DELETE_ARRAY(&ServCtl->mThreadVec, pthread_t);
+		GS_DELETE_ARRAY(&ServCtl->mThreadMgmt, pthread_t);
+
+		gs_close_cond(&ServCtl->mEvtFdExit);
+		gs_close_cond(&ServCtl->mEvtFdExitReq);
+
+		if (ServCtl->mWork) {
+			for (size_t i = 0; i < ServCtl->mSockFdNum; i++)
+				gs_close_cond(ServCtl->mSockFdVec + i);
+			GS_DELETE_ARRAY(&ServCtl->mSockFdVec, int);
+
+			for (size_t i = 0; i < ServCtl->mEPollFdNum; i++)
+				gs_close_cond(ServCtl->mEPollFdVec + i);
+			GS_DELETE_ARRAY(&ServCtl->mEPollFdVec, int);
+
+			for (size_t i = 0; i < ServCtl->mWriteNum; i++)
+				GS_DELETE_F(&ServCtl->mWriteVec[i], gs_vserv_write_destroy);
+			GS_DELETE_ARRAY(&ServCtl->mWriteVec, struct GsVServWrite *);
+
+			for (size_t i = 0; i < ServCtl->mWakeAsyncNum; i++)
+				gs_close_cond(ServCtl->mWakeAsyncVec + i);
+			GS_DELETE_ARRAY(&ServCtl->mWakeAsyncVec, int);
+
+			GS_DELETE(&ServCtl->mWork, struct GsVServWork);
+		}
+
 		GS_DELETE(&ServCtl, struct GsVServCtl);
 	}
 
@@ -716,10 +740,19 @@ clean:
 	return r;
 }
 
-/* FIXME: did not want to add this function see if refactor possible */
-struct GsVServCtlCb * gs_vserv_ctl_get_cb(struct GsVServCtl *ServCtl)
+struct GsVServCon * gs_vserv_ctl_get_con(struct GsVServCtl *ServCtl)
 {
-	return ServCtl->mCb;
+	return ServCtl->mCon;
+}
+
+struct GsVServWorkCb * gs_vserv_ctl_get_workcb(struct GsVServCtl *ServCtl)
+{
+	return &ServCtl->mWorkCb;
+}
+
+struct GsVServMgmtCb * gs_vserv_ctl_get_mgmtcb(struct GsVServCtl *ServCtl)
+{
+	return &ServCtl->mMgmtCb;
 }
 
 int gs_vserv_write_create(
@@ -940,7 +973,9 @@ clean:
 
 int gs_vserv_start_2(
 	int *ServFdVec, size_t ServFdNum, /*owned/stealing*/
-	struct GsVServCtlCb *Cb,
+	struct GsVServCon *Con, /*owned*/
+	struct GsVServWorkCb WorkCb,
+	struct GsVServMgmtCb MgmtCb,
 	struct GsVServCtl **oServCtl)
 {
 	int r = 0;
@@ -949,7 +984,7 @@ int gs_vserv_start_2(
 
 	size_t ThreadNum = ServFdNum;
 
-	if (!!(r = gs_vserv_ctl_create_part(ThreadNum, ServFdVec, ServFdNum, Cb, &ServCtl)))
+	if (!!(r = gs_vserv_ctl_create_part(ThreadNum, ServFdVec, ServFdNum, GS_ARGOWN(&Con), WorkCb, MgmtCb, &ServCtl)))
 		GS_GOTO_CLEAN();
 
 	if (!!(r = gs_vserv_ctl_create_finish(ServCtl)))

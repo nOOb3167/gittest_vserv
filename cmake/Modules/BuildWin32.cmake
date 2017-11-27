@@ -1,6 +1,7 @@
 # other platform headers and sources (for dummylib)
 
 SET(GITTEST_PLAT_HEADERS_NIX
+  include/gittest/vserv_crank0_priv.h
   include/gittest/vserv_enet_priv.h
   ${GITTEST_COMMON_HEADERS_NIX}
 )
