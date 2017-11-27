@@ -69,8 +69,6 @@ struct GsVServConExt
 
 int gs_vserv_con_ext_create(
 	struct GsAuxConfigCommonVars *CommonVars,
-	struct GsVServManageId *ManageId, /*owned*/
-	struct GsVServGroupAll *GroupAll, /*owned*/
 	struct GsVServConExt **oExt);
 struct GsVServMgmt * gs_vserv_con_ext_getmgmt(struct GsVServCon *Base);
 

@@ -184,13 +184,20 @@ int gs_vserv_user_genid(struct GsVServUser *User, struct GsVServManageId *Manage
 
 int gs_vserv_con_ext_create(
 	struct GsAuxConfigCommonVars *CommonVars,
-	struct GsVServManageId *ManageId, /*owned*/
-	struct GsVServGroupAll *GroupAll, /*owned*/
 	struct GsVServConExt **oExt)
 {
 	int r = 0;
 
 	struct GsVServConExt *Ext = NULL;
+
+	struct GsVServManageId *ManageId = NULL;
+	struct GsVServGroupAll *GroupAll = NULL;
+
+	if (!!(r = gs_vserv_manage_id_create(&ManageId)))
+		GS_GOTO_CLEAN();
+
+	if (!!(r = gs_vserv_groupall_create(NULL, 0, NULL, 0, &GroupAll)))
+		GS_GOTO_CLEAN();
 
 	Ext = new GsVServConExt();
 	Ext->base.CbGetMgmt = gs_vserv_con_ext_getmgmt;
@@ -597,8 +604,6 @@ int gs_vserv_start_crank0(struct GsAuxConfigCommonVars *CommonVars)
 	int r = 0;
 
 	std::vector<int> ServFd;
-	struct GsVServManageId *ManageId = NULL;
-	struct GsVServGroupAll *GroupAll = NULL;
 	struct GsVServConExt *Ext = NULL;
 	struct GsVServWorkCb WorkCb = {};
 	struct GsVServMgmtCb MgmtCb = {};
@@ -606,7 +611,7 @@ int gs_vserv_start_crank0(struct GsAuxConfigCommonVars *CommonVars)
 	struct GsVServWork *Work = NULL;
 	struct GsVServCtl *ServCtl = NULL;
 
-	size_t ThreadNum = 0;
+	size_t ThreadNum = 1;
 
 	WorkCb.CbThreadFunc = gs_vserv_receive_func;
 	WorkCb.CbCrank = gs_vserv_crank0;
@@ -614,23 +619,15 @@ int gs_vserv_start_crank0(struct GsAuxConfigCommonVars *CommonVars)
 	MgmtCb.CbThreadFuncM = gs_vserv_mgmt_receive_func;
 	MgmtCb.CbCrankM = gs_vserv_crankm0;
 
-	if (!!(r = gs_vserv_manage_id_create(&ManageId)))
-		GS_GOTO_CLEAN();
-
-	if (!!(r = gs_vserv_groupall_create(NULL, 0, NULL, 0, &GroupAll)))
-		GS_GOTO_CLEAN();
-
-	if (!!(r = gs_vserv_con_ext_create(CommonVars, GS_ARGOWN(&ManageId), GS_ARGOWN(&GroupAll), &Ext)))
-		GS_GOTO_CLEAN();
-
 	/* socket FD creation split and pushed upwards from gs_vserv_start_2 / ServCtl creation.
 	   prep work for future systemd integration (socket activation receives FD from outside) */
 
-	ServFd.resize(1, -1);
-
-	ThreadNum = ServFd.size();
+	ServFd.resize(ThreadNum, -1);
 
 	if (!!(r = gs_vserv_sockets_create(std::to_string(CommonVars->VServPort).c_str(), ServFd.data(), ServFd.size())))
+		GS_GOTO_CLEAN();
+
+	if (!!(r = gs_vserv_con_ext_create(CommonVars, &Ext)))
 		GS_GOTO_CLEAN();
 
 	if (!!(r = gs_vserv_quit_ctl_create(&QuitCtl)))
@@ -652,8 +649,6 @@ clean:
 	GS_DELETE_F(&ServCtl, gs_vserv_ctl_destroy);
 	GS_DELETE_F(&Work, gs_vserv_work_destroy);
 	// FIXME: GS_DELETE_F(&Ext, gs_vserv_con_ext_destroy);
-	GS_DELETE_F(&GroupAll, gs_vserv_groupall_destroy);
-	GS_DELETE_F(&ManageId, gs_vserv_manage_id_destroy);
 	for (size_t i = 0; i < ServFd.size(); i++)
 		gs_close_cond(&ServFd[i]);
 
