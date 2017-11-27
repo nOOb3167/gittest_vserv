@@ -46,6 +46,13 @@ struct GsVServWrite
 	std::deque<GsVServWriteEntry> mQueue;
 };
 
+enum GsSockType
+{
+	GS_SOCK_TYPE_NORMAL = 2,
+	GS_SOCK_TYPE_EVENT = 3,
+	GS_SOCK_TYPE_WAKE = 4,
+};
+
 /** @sa
 		::gs_vserv_epollctx_add_for
 */

@@ -4,6 +4,7 @@ SET(GITTEST_VSERV_HEADERS
   include/gittest/vserv_crank0_priv.h
   include/gittest/vserv_enet_priv.h
   include/gittest/vserv_helpers.h
+  include/gittest/vserv_helpers_plat.h
   include/gittest/vserv_net.h
   include/gittest/vserv_work.h
   ${GITTEST_LIB_HEADERS}
@@ -12,6 +13,7 @@ SET(GITTEST_VSERV_SOURCES
   src/vserv_crank0.cpp
   src/vserv_enet.cpp
   src/vserv_helpers.cpp
+  src/vserv_helpers_plat.cpp
   src/vserv_net_main.cpp
   src/vserv_net_nix.cpp
   src/vserv_work.cpp

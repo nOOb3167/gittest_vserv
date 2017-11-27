@@ -12,6 +12,7 @@
 
 #include <gittest/config.h>
 #include <gittest/vserv_helpers.h>
+#include <gittest/vserv_helpers_plat.h>
 #include <gittest/vserv_work.h>
 
 #define GS_ADDR_RAWHASH_BUCKET(RAWHASH, NUM_BUCKETS) ((RAWHASH) % (NUM_BUCKETS))
@@ -21,13 +22,6 @@ struct GsVServMgmt;
 struct GsVServLock;
 struct GsVServCtl;
 struct GsVServRespondM;
-
-/* receives pointer (Data) to the to-be-deleted data pointer (*Data)
-   deletion must be skipped if *Data is NULL
-   deletion must cause *Data to become NULL */
-typedef int (*gs_data_deleter_t)(uint8_t **Data);
-/* single indirection version of gs_data_deleter_t */
-typedef int (*gs_data_deleter_sp_t)(uint8_t *Data);
 
 struct GsAddr
 {
@@ -41,13 +35,6 @@ struct gs_addr_hash_t { size_t operator()(const struct GsAddr &k) const; };
 struct gs_addr_equal_t { bool operator()(const GsAddr &a, const GsAddr &b) const; };
 struct gs_addr_less_t { bool operator()(const GsAddr &a, const GsAddr &b) const; };
 #endif /* __cplusplus */
-
-enum GsSockType
-{
-	GS_SOCK_TYPE_NORMAL = 2,
-	GS_SOCK_TYPE_EVENT = 3,
-	GS_SOCK_TYPE_WAKE = 4,
-};
 
 struct GsVServCon
 {
@@ -70,22 +57,6 @@ struct GsVServMgmtCb
 	int(*CbCrankM)(struct GsVServCtl *ServCtl, struct GsPacket *Packet, struct GsAddr *Addr, struct GsVServRespondM *Respond);
 };
 
-struct GsVServQuitCtl
-{
-	int mEvtFdExitReq;
-	int mEvtFdExit;
-};
-
-int gs_vserv_quit_ctl_create(struct GsVServQuitCtl **oQuitCtl);
-int gs_vserv_quit_ctl_destroy(struct GsVServQuitCtl *QuitCtl);
-int gs_vserv_quit_ctl_reflect_evt_fd_exit(struct GsVServQuitCtl *QuitCtl, int *oFd);
-
-int gs_vserv_lock_create(struct GsVServLock **oLock);
-int gs_vserv_lock_destroy(struct GsVServLock *Lock);
-int gs_vserv_lock_lock(struct GsVServLock *Lock);
-int gs_vserv_lock_unlock(struct GsVServLock *Lock);
-int gs_vserv_lock_release(struct GsVServLock *Lock);
-
 size_t gs_addr_rawhash(struct GsAddr *Addr);
 size_t gs_addr_port(struct GsAddr *Addr);
 
@@ -107,10 +78,6 @@ struct GsVServMgmt *   gs_vserv_ctl_get_mgmt(struct GsVServCtl *ServCtl);
 struct GsVServCon *    gs_vserv_ctl_get_con(struct GsVServCtl *ServCtl);
 struct GsVServWorkCb * gs_vserv_ctl_get_workcb(struct GsVServCtl *ServCtl);
 struct GsVServMgmtCb * gs_vserv_ctl_get_mgmtcb(struct GsVServCtl *ServCtl);
-
-int gs_vserv_sockets_create(
-	const char *Port,
-	int *ioSockFdVec, size_t SockFdNum);
 
 /**/
 
