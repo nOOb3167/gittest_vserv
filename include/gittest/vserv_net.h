@@ -12,6 +12,7 @@
 
 #include <gittest/config.h>
 #include <gittest/vserv_helpers.h>
+#include <gittest/vserv_work.h>
 
 #define GS_ADDR_RAWHASH_BUCKET(RAWHASH, NUM_BUCKETS) ((RAWHASH) % (NUM_BUCKETS))
 
@@ -72,6 +73,16 @@ struct GsVServMgmtCb
 	int(*CbCrankM)(struct GsVServCtl *ServCtl, struct GsPacket *Packet, struct GsAddr *Addr, struct GsVServRespondM *Respond);
 };
 
+struct GsVServQuitCtl
+{
+	int mEvtFdExitReq;
+	int mEvtFdExit;
+};
+
+int gs_vserv_quit_ctl_create(struct GsVServQuitCtl **oQuitCtl);
+int gs_vserv_quit_ctl_destroy(struct GsVServQuitCtl *QuitCtl);
+int gs_vserv_quit_ctl_reflect_evt_fd_exit(struct GsVServQuitCtl *QuitCtl, int *oFd);
+
 int gs_vserv_lock_create(struct GsVServLock **oLock);
 int gs_vserv_lock_destroy(struct GsVServLock *Lock);
 int gs_vserv_lock_lock(struct GsVServLock *Lock);
@@ -88,13 +99,14 @@ int gs_vserv_receive_func(
 
 int gs_vserv_ctl_create_part(
 	size_t ThreadNum,
-	int *ioSockFdVec, size_t SockFdNum, /*owned/stealing*/
 	struct GsVServCon *Con, /*owned*/
 	struct GsVServWorkCb WorkCb,
 	struct GsVServMgmtCb MgmtCb,
 	struct GsVServCtl **oServCtl);
 int gs_vserv_ctl_create_finish(
-	struct GsVServCtl *ServCtl);
+	struct GsVServCtl *ServCtl,
+	struct GsVServQuitCtl *QuitCtl, /*owned*/
+	struct GsVServWork *Work /*owned*/);
 int gs_vserv_ctl_destroy(struct GsVServCtl *ServCtl);
 int gs_vserv_ctl_quit_request(struct GsVServCtl *ServCtl);
 int gs_vserv_ctl_quit_wait(struct GsVServCtl *ServCtl);
@@ -121,13 +133,6 @@ int gs_vserv_respond_enqueue_free(
 int gs_vserv_sockets_create(
 	const char *Port,
 	int *ioSockFdVec, size_t SockFdNum);
-
-int gs_vserv_start_2(
-	int *ServFdVec, size_t ServFdNum, /*owned/stealing*/
-	struct GsVServCon *Con, /*owned*/
-	struct GsVServWorkCb WorkCb,
-	struct GsVServMgmtCb MgmtCb,
-	struct GsVServCtl **oServCtl);
 
 /**/
 

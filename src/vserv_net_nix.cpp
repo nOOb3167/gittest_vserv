@@ -36,21 +36,12 @@ struct GsVServLock
 	bool mHaveLock;
 };
 
-struct GsVServWork
-{
-	int *mSockFdVec; size_t mSockFdNum;
-	int *mEPollFdVec; size_t mEPollFdNum;
-	struct GsVServWrite **mWriteVec; size_t mWriteNum;
-	int *mWakeAsyncVec; size_t mWakeAsyncNum;
-};
-
 struct GsVServCtl
 {
 	size_t mNumThread;
 	pthread_t *mThreadVec; size_t mThreadNum;
 	pthread_t *mThreadMgmt; size_t mThreadMgmtNum;
-	int mEvtFdExitReq;
-	int mEvtFdExit;
+	struct GsVServQuitCtl *mQuitCtl;
 	struct GsVServWork *mWork;
 	// FIXME: mCon provides access to what SHOULD be mMgmt via CbGetMgmt()
 	/* shared (work&mgmt) context */
@@ -65,63 +56,13 @@ struct GsVServPthreadCtx
   size_t mSockIdx;
 };
 
-struct GsVServRespond
-{
-	struct GsVServCtl *mServCtl;
-	size_t mSockIdx;
-};
-
-struct GsVServWriteElt
-{
-	std::shared_ptr<uint8_t> mData; size_t mLenData;
-};
-
-struct GsVServWriteEntry
-{
-	struct GsAddr mAddr;
-	struct GsVServWriteElt mElt;
-};
-
-/** @sa
-       ::gs_vserv_respond_enqueue
-*/
-struct GsVServWrite
-{
-	bool mTryAtOnce;
-	std::deque<GsVServWriteEntry> mQueue;
-};
-
-struct GsEPollCtx
-{
-	enum GsSockType mType;
-	struct GsVServCtl *mServCtl; /*notowned*/
-	size_t mSockIdx;
-	size_t mFd; /*notowned - informative*/
-};
-
 static int gs_addr_sockaddr_in(const struct GsAddr *Addr, struct sockaddr_in *SockAddr);
 static int gs_eventfd_read(int EvtFd);
 static int gs_eventfd_write(int EvtFd, int Value);
-static int gs_vserv_receive_evt_normal(
-	struct GsVServCtl *ServCtl,
-	struct GsEPollCtx *EPollCtx,
-	char *UdpBuf, size_t LenUdp);
-static int gs_vserv_receive_evt_event(
-	struct GsVServCtl *ServCtl,
-	struct GsEPollCtx *EPollCtx);
-static int gs_vserv_receive_writable(
-	struct GsVServCtl *ServCtl,
-	struct GsEPollCtx *EPollCtx);
-static void * gs_vserv_receive_func_pthread(
+static void * gs_vserv_work_func_pthread(
 	void *arg);
-static void * gs_vserv_mgmt_receive_func_pthread(
+static void * gs_vserv_mgmt_func_pthread(
 	void *arg);
-static int gs_vserv_epollctx_add_for(
-	int EPollFd,
-	size_t SockIdx,
-	int Fd,
-	enum GsSockType Type,
-	struct GsVServCtl *ServCtl);
 
 size_t gs_addr_hash_t::operator()(const struct GsAddr &k) const {
 	// FIXME: https://stackoverflow.com/questions/35985960/c-why-is-boosthash-combine-the-best-way-to-combine-hash-values
@@ -138,6 +79,53 @@ bool gs_addr_equal_t::operator()(const GsAddr &a, const GsAddr &b) const {
 
 bool gs_addr_less_t::operator()(const GsAddr &a, const GsAddr &b) const {
 	return gs_addr_hash_t()(a) < gs_addr_hash_t()(b);
+}
+
+int gs_vserv_quit_ctl_create(struct GsVServQuitCtl **oQuitCtl)
+{
+	int r = 0;
+
+	struct GsVServQuitCtl *QuitCtl = NULL;
+
+	int EvtFdExitReq = -1;
+	int EvtFdExit = -1;
+
+	// thread requesting exit 0 -> 1 -> 0
+	if (-1 == (EvtFdExitReq = eventfd(0, EFD_CLOEXEC | EFD_SEMAPHORE)))
+		GS_ERR_CLEAN(1);
+	// controller (servctl) ordering exit 0 -> NumThread -> -=1 -> .. -> 0
+	if (-1 == (EvtFdExit = eventfd(0, EFD_CLOEXEC | EFD_SEMAPHORE)))
+		GS_ERR_CLEAN(1);
+
+	QuitCtl = new GsVServQuitCtl();
+	QuitCtl->mEvtFdExitReq = GS_FDOWN(&EvtFdExitReq);
+	QuitCtl->mEvtFdExit = GS_FDOWN(&EvtFdExit);
+
+	if (oQuitCtl)
+		*oQuitCtl = GS_ARGOWN(&QuitCtl);
+
+clean:
+	gs_close_cond(&EvtFdExit);
+	gs_close_cond(&EvtFdExitReq);
+
+	return r;
+}
+
+int gs_vserv_quit_ctl_destroy(struct GsVServQuitCtl *QuitCtl)
+{
+	if (QuitCtl) {
+		gs_close_cond(&QuitCtl->mEvtFdExitReq);
+		gs_close_cond(&QuitCtl->mEvtFdExit);
+	}
+
+	return 0;
+}
+
+int gs_vserv_quit_ctl_reflect_evt_fd_exit(struct GsVServQuitCtl *QuitCtl, int *oFd)
+{
+	if (oFd)
+		*oFd = QuitCtl->mEvtFdExit;
+	return 0;
 }
 
 int gs_vserv_lock_create(struct GsVServLock **oLock)
@@ -443,7 +431,7 @@ clean:
 	return r;
 }
 
-void * gs_vserv_receive_func_pthread(
+void * gs_vserv_work_func_pthread(
 	void *arg)
 {
 	int r = 0;
@@ -466,7 +454,7 @@ clean:
 	return NULL;
 }
 
-void * gs_vserv_mgmt_receive_func_pthread(
+void * gs_vserv_mgmt_func_pthread(
 	void *arg)
 {
 	int r = 0;
@@ -490,45 +478,8 @@ clean:
 	return NULL;
 }
 
-int gs_vserv_epollctx_add_for(
-	int EPollFd,
-	size_t SockIdx,
-	int Fd,
-	enum GsSockType Type,
-	struct GsVServCtl *ServCtl)
-{
-	int r = 0;
-
-	struct epoll_event Evt = {};
-
-	struct GsEPollCtx **EvtDataPtr = (struct GsEPollCtx **) &Evt.data.ptr;
-
-	if (Type == GS_SOCK_TYPE_NORMAL)
-		Evt.events = EPOLLOUT | EPOLLIN | EPOLLET;    /* NOTE: no EPOLLONESHOT this time */
-	else
-		Evt.events = EPOLLIN | EPOLLET;
-	/* remainder effectively setting up Evt.data.ptr */
-	(*EvtDataPtr) = new GsEPollCtx();
-	(*EvtDataPtr)->mType = Type;
-	(*EvtDataPtr)->mServCtl = ServCtl;
-	(*EvtDataPtr)->mSockIdx = SockIdx;
-	(*EvtDataPtr)->mFd = Fd;
-
-	if (-1 == epoll_ctl(EPollFd, EPOLL_CTL_ADD, Fd, &Evt))
-		GS_ERR_CLEAN(1);
-	(*EvtDataPtr) = NULL;
-
-clean:
-	GS_DELETE(&(*EvtDataPtr), struct GsEPollCtx);
-
-	return r;
-}
-
-
-
 int gs_vserv_ctl_create_part(
 	size_t ThreadNum,
-	int *ioSockFdVec, size_t SockFdNum, /*owned/stealing*/
 	struct GsVServCon *Con, /*owned*/
 	struct GsVServWorkCb WorkCb,
 	struct GsVServMgmtCb MgmtCb,
@@ -538,73 +489,14 @@ int gs_vserv_ctl_create_part(
 
 	struct GsVServCtl *ServCtl = NULL;
 
-	struct GsVServWork *Work = NULL;
-
-	int EvtFdExitReq = -1;
-	int EvtFdExit = -1;
-
-	// thread requesting exit 0 -> 1 -> 0
-	if (-1 == (EvtFdExitReq = eventfd(0, EFD_CLOEXEC | EFD_SEMAPHORE)))
-		GS_ERR_CLEAN(1);
-	// controller (servctl) ordering exit 0 -> NumThread -> -=1 -> .. -> 0
-	if (-1 == (EvtFdExit = eventfd(0, EFD_CLOEXEC | EFD_SEMAPHORE)))
-		GS_ERR_CLEAN(1);
-
-	Work = new GsVServWork();
-	Work->mSockFdNum = ThreadNum;
-	Work->mSockFdVec = new int[ThreadNum];
-	for (size_t i = 0; i < ThreadNum; i++)
-		Work->mSockFdVec[i] = GS_FDOWN(&ioSockFdVec[i]);
-	Work->mEPollFdNum = ThreadNum;
-	Work->mEPollFdVec = new int[ThreadNum];
-	for (size_t i = 0; i < ThreadNum; i++)
-		Work->mEPollFdVec[i] = -1;
-	Work->mWakeAsyncNum = ThreadNum;
-	Work->mWakeAsyncVec = new int[ThreadNum];
-	for (size_t i = 0; i < ThreadNum; i++)
-		Work->mWakeAsyncVec[i] = -1;
-
-	if (! Work->mSockFdVec || ! Work->mEPollFdVec || ! Work->mWakeAsyncVec)
-		GS_ERR_CLEAN(1);
-
-	Work->mWriteNum = ThreadNum;
-	Work->mWriteVec = new GsVServWrite *[ThreadNum];
-	for (size_t i = 0; i < ThreadNum; i++)
-		if (!!(r = gs_vserv_write_create(&Work->mWriteVec[i])))
-			GS_GOTO_CLEAN();
-
-	/* create epoll sets */
-
-	for (size_t i = 0; i < ThreadNum; i++)
-		if (-1 == (Work->mEPollFdVec[i] = epoll_create1(EPOLL_CLOEXEC)))
-			GS_ERR_CLEAN(1);
-
-	/* add socks, exit, wake events to epoll sets */
-
-	for (size_t i = 0; i < ThreadNum; i++) {
-		if (!!(r = gs_vserv_epollctx_add_for(Work->mEPollFdVec[i], -1, EvtFdExit, GS_SOCK_TYPE_EVENT, ServCtl)))
-			GS_GOTO_CLEAN();
-		GS_ASSERT(ThreadNum == SockFdNum);
-		if (!!(r = gs_vserv_epollctx_add_for(Work->mEPollFdVec[i], i, Work->mSockFdVec[i], GS_SOCK_TYPE_NORMAL, ServCtl)))
-			GS_GOTO_CLEAN();
-		if (!!(r = gs_vserv_epollctx_add_for(Work->mEPollFdVec[i], -1, Work->mWakeAsyncVec[i], GS_SOCK_TYPE_WAKE, ServCtl)))
-			GS_GOTO_CLEAN();
-	}
-
-	/* meant to interrupt a sleeping worker (inside ex epoll_wait) */
-
-	for (size_t i = 0; i < ThreadNum; i++) {
-		if (-1 == (Work->mWakeAsyncVec[i] = eventfd(0, EFD_CLOEXEC | EFD_SEMAPHORE)))
-			GS_ERR_CLEAN(1);
-	}
-
 	ServCtl = new GsVServCtl();
 	ServCtl->mNumThread = ThreadNum;
 	ServCtl->mThreadNum = ThreadNum;
 	ServCtl->mThreadVec = new pthread_t[ThreadNum];
 	ServCtl->mThreadMgmtNum = 1;
 	ServCtl->mThreadMgmt = new pthread_t[1];
-	ServCtl->mWork = GS_ARGOWN(&Work);
+	ServCtl->mQuitCtl = NULL;
+	ServCtl->mWork = NULL;
 	ServCtl->mCon = GS_ARGOWN(&Con);
 	ServCtl->mWorkCb = WorkCb;
 	ServCtl->mMgmtCb = MgmtCb;
@@ -616,23 +508,26 @@ int gs_vserv_ctl_create_part(
 		*oServCtl = GS_ARGOWN(&ServCtl);
 
 clean:
-	gs_close_cond(&EvtFdExit);
-	gs_close_cond(&EvtFdExitReq);
 	GS_DELETE_F(&ServCtl, gs_vserv_ctl_destroy);
-	for (size_t i = 0; i < SockFdNum; i++)
-		gs_close_cond(&ioSockFdVec[i]);
 
 	return r;
 }
 
 int gs_vserv_ctl_create_finish(
-	struct GsVServCtl *ServCtl)
+	struct GsVServCtl *ServCtl,
+	struct GsVServQuitCtl *QuitCtl, /*owned*/
+	struct GsVServWork *Work /*owned*/)
 {
 	int r = 0;
 
 	size_t ThreadsInitedCnt = 0;
 	bool AttrInited = false;
 	pthread_attr_t Attr = {};
+
+	/**/
+
+	ServCtl->mQuitCtl = GS_ARGOWN(&QuitCtl);
+	ServCtl->mWork = GS_ARGOWN(&Work);
 
 	/* create threads */
 
@@ -644,7 +539,7 @@ int gs_vserv_ctl_create_finish(
 		struct GsVServPthreadCtx *Ctx = new GsVServPthreadCtx();
 		Ctx->mServCtl = ServCtl;
 		Ctx->mSockIdx = i;
-		if (!!(r = pthread_create(ServCtl->mThreadVec + i, &Attr, gs_vserv_receive_func_pthread, Ctx)))
+		if (!!(r = pthread_create(ServCtl->mThreadVec + i, &Attr, gs_vserv_work_func_pthread, Ctx)))
 			GS_GOTO_CLEAN();
 		Ctx = NULL;
 		ThreadsInitedCnt++;
@@ -655,7 +550,7 @@ int gs_vserv_ctl_create_finish(
 		struct GsVServPthreadCtx *Ctx = new GsVServPthreadCtx();
 		Ctx->mServCtl = ServCtl;
 		Ctx->mSockIdx = -1;
-		if (!!(r = pthread_create(ServCtl->mThreadMgmt + 0, &Attr, gs_vserv_mgmt_receive_func_pthread, Ctx)))
+		if (!!(r = pthread_create(ServCtl->mThreadMgmt + 0, &Attr, gs_vserv_mgmt_func_pthread, Ctx)))
 			GS_GOTO_CLEAN();
 		Ctx = NULL;
 	}
@@ -664,6 +559,8 @@ clean:
 	if (AttrInited)
 		if (!!(r = pthread_attr_destroy(&Attr)))
 			GS_ASSERT(0);
+	GS_DELETE_F(&QuitCtl, gs_vserv_quit_ctl_destroy);
+	GS_DELETE_F(&Work, gs_vserv_work_destroy);
 
 	return r;
 }
@@ -722,6 +619,9 @@ clean:
 int gs_vserv_ctl_quit_wait(struct GsVServCtl *ServCtl)
 {
 	int r = 0;
+
+	// FIXME: port to GsVServQuitCtl
+	GS_ASSERT(0);
 
 	GS_ALLOCA_VAR(RetVal, void *, ServCtl->mThreadNum);
 
@@ -967,37 +867,6 @@ clean:
 	gs_close_cond(&TmpFd);
 	if (Res)
 		freeaddrinfo(Res);
-
-	return r;
-}
-
-int gs_vserv_start_2(
-	int *ServFdVec, size_t ServFdNum, /*owned/stealing*/
-	struct GsVServCon *Con, /*owned*/
-	struct GsVServWorkCb WorkCb,
-	struct GsVServMgmtCb MgmtCb,
-	struct GsVServCtl **oServCtl)
-{
-	int r = 0;
-
-	struct GsVServCtl *ServCtl = NULL;
-
-	size_t ThreadNum = ServFdNum;
-
-	if (!!(r = gs_vserv_ctl_create_part(ThreadNum, ServFdVec, ServFdNum, GS_ARGOWN(&Con), WorkCb, MgmtCb, &ServCtl)))
-		GS_GOTO_CLEAN();
-
-	if (!!(r = gs_vserv_ctl_create_finish(ServCtl)))
-		GS_GOTO_CLEAN();
-
-	if (oServCtl)
-		*oServCtl = GS_ARGOWN(&ServCtl);
-
-clean:
-	GS_DELETE_F(&ServCtl, gs_vserv_ctl_destroy);
-
-	for (size_t i = 0; i < ServFdNum; i++)
-		gs_close_cond(ServFdVec + i);
 
 	return r;
 }

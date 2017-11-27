@@ -10,6 +10,7 @@
 #include <gittest/misc.h>
 #include <gittest/filesys.h>
 #include <gittest/vserv_enet_priv.h>
+#include <gittest/vserv_work.h>
 #include <gittest/vserv_net.h>
 #include <gittest/vserv_crank0_priv.h>
 
@@ -198,10 +199,10 @@ int gs_vserv_con_ext_create(
 	Ext->mUsers;      /*dummy*/
 	Ext->mUserIdAddr; /*dummy*/
 	Ext->mGroupAll = sp<GsVServGroupAll>(GS_ARGOWN(&GroupAll), gs_vserv_groupall_destroy);
-	Ext->mEnet = NULL;
+	Ext->mMgmt = NULL;
 	Ext->mLock = NULL;
 
-	if (!!(r = gs_vserv_enet_create(CommonVars, &Ext->mEnet)))
+	if (!!(r = gs_vserv_mgmt_create(CommonVars, &Ext->mMgmt)))
 		GS_GOTO_CLEAN();
 
 	if (!!(r = gs_vserv_lock_create(&Ext->mLock)))
@@ -601,12 +602,16 @@ int gs_vserv_start_crank0(struct GsAuxConfigCommonVars *CommonVars)
 	struct GsVServConExt *Ext = NULL;
 	struct GsVServWorkCb WorkCb = {};
 	struct GsVServMgmtCb MgmtCb = {};
+	struct GsVServQuitCtl *QuitCtl = NULL;
+	struct GsVServWork *Work = NULL;
 	struct GsVServCtl *ServCtl = NULL;
+
+	size_t ThreadNum = 0;
 
 	WorkCb.CbThreadFunc = gs_vserv_receive_func;
 	WorkCb.CbCrank = gs_vserv_crank0;
 
-	MgmtCb.CbThreadFuncM = gs_vserv_enet_receive_func;
+	MgmtCb.CbThreadFuncM = gs_vserv_mgmt_receive_func;
 	MgmtCb.CbCrankM = gs_vserv_crankm0;
 
 	if (!!(r = gs_vserv_manage_id_create(&ManageId)))
@@ -623,10 +628,21 @@ int gs_vserv_start_crank0(struct GsAuxConfigCommonVars *CommonVars)
 
 	ServFd.resize(1, -1);
 
+	ThreadNum = ServFd.size();
+
 	if (!!(r = gs_vserv_sockets_create(std::to_string(CommonVars->VServPort).c_str(), ServFd.data(), ServFd.size())))
 		GS_GOTO_CLEAN();
 
-	if (!!(r = gs_vserv_start_2(ServFd.data(), ServFd.size(), GS_BASE_ARGOWN(&Ext), WorkCb, MgmtCb, &ServCtl)))
+	if (!!(r = gs_vserv_quit_ctl_create(&QuitCtl)))
+		GS_GOTO_CLEAN();
+
+	if (!!(r = gs_vserv_ctl_create_part(ThreadNum, GS_BASE_ARGOWN(&Ext), WorkCb, MgmtCb, &ServCtl)))
+		GS_GOTO_CLEAN();
+
+	if (!!(r = gs_vserv_work_create(ThreadNum, ServFd.data(), ServFd.size(), ServCtl, QuitCtl, &Work)))
+		GS_GOTO_CLEAN();
+
+	if (!!(r = gs_vserv_ctl_create_finish(ServCtl, GS_ARGOWN(&QuitCtl), GS_ARGOWN(&Work))))
 		GS_GOTO_CLEAN();
 
 	if (!!(r = gs_vserv_ctl_quit_wait(ServCtl)))
@@ -634,7 +650,7 @@ int gs_vserv_start_crank0(struct GsAuxConfigCommonVars *CommonVars)
 
 clean:
 	GS_DELETE_F(&ServCtl, gs_vserv_ctl_destroy);
-	// FIXME: GS_DELETE_F(&Cb0, gs_vserv_ctl_cb0_destroy);
+	GS_DELETE_F(&Work, gs_vserv_work_destroy);
 	// FIXME: GS_DELETE_F(&Ext, gs_vserv_con_ext_destroy);
 	GS_DELETE_F(&GroupAll, gs_vserv_groupall_destroy);
 	GS_DELETE_F(&ManageId, gs_vserv_manage_id_destroy);
