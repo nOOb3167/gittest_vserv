@@ -20,9 +20,7 @@
 struct GsVServMgmt;
 struct GsVServLock;
 struct GsVServCtl;
-struct GsVServRespond;
 struct GsVServRespondM;
-struct GsVServWrite;
 
 /* receives pointer (Data) to the to-be-deleted data pointer (*Data)
    deletion must be skipped if *Data is NULL
@@ -109,22 +107,6 @@ struct GsVServMgmt *   gs_vserv_ctl_get_mgmt(struct GsVServCtl *ServCtl);
 struct GsVServCon *    gs_vserv_ctl_get_con(struct GsVServCtl *ServCtl);
 struct GsVServWorkCb * gs_vserv_ctl_get_workcb(struct GsVServCtl *ServCtl);
 struct GsVServMgmtCb * gs_vserv_ctl_get_mgmtcb(struct GsVServCtl *ServCtl);
-
-int gs_vserv_write_create(
-	struct GsVServWrite **oWrite);
-int gs_vserv_write_destroy(struct GsVServWrite *Write);
-int gs_vserv_write_elt_del_free(uint8_t **DataBuf);
-int gs_vserv_write_elt_del_sp_free(uint8_t *DataBuf);
-int gs_vserv_write_drain_to(struct GsVServCtl *ServCtl, size_t SockIdx, int *oHaveEAGAIN);
-int gs_vserv_respond_enqueue(
-	struct GsVServRespond *Respond,
-	gs_data_deleter_sp_t DataDeleterSp,
-	uint8_t *DataBuf, size_t LenData, /*owned*/
-	const struct GsAddr **AddrVec, size_t LenAddrVec);
-int gs_vserv_respond_enqueue_free(
-	struct GsVServRespond *Respond,
-	uint8_t *DataBuf, size_t LenData, /*owned*/
-	const struct GsAddr **AddrVec, size_t LenAddrVec);
 
 int gs_vserv_sockets_create(
 	const char *Port,

@@ -21,6 +21,74 @@
 #include <gittest/vserv_net.h>
 #include <gittest/vserv_work.h>
 
+struct GsVServWriteElt
+{
+	sp<uint8_t> mData; size_t mLenData;
+};
+
+struct GsVServWriteEntry
+{
+	struct GsAddr mAddr;
+	struct GsVServWriteElt mElt;
+};
+
+/** @sa
+	   ::gs_vserv_write_create
+	   ::gs_vserv_write_destroy
+	   ::gs_vserv_write_elt_del_free
+	   ::gs_vserv_write_elt_del_sp_free
+	   ::gs_vserv_write_drain_to
+       ::gs_vserv_respond_enqueue
+*/
+struct GsVServWrite
+{
+	bool mTryAtOnce;
+	std::deque<GsVServWriteEntry> mQueue;
+};
+
+/** @sa
+		::gs_vserv_epollctx_add_for
+*/
+struct GsEPollCtx
+{
+	enum GsSockType mType;
+	struct GsVServCtl *mServCtl; /*notowned*/
+	size_t mSockIdx;
+	size_t mFd; /*notowned - informative*/
+};
+
+/** @sa
+		::gs_vserv_respond_enqueue
+		::gs_vserv_respond_enqueue_free
+*/
+struct GsVServRespond
+{
+	struct GsVServCtl *mServCtl;
+	size_t mSockIdx;
+};
+
+/** @sa
+		::gs_vserv_work_create
+		::gs_vserv_work_destroy
+*/
+struct GsVServWork
+{
+	int *mSockFdVec; size_t mSockFdNum;
+	int *mEPollFdVec; size_t mEPollFdNum;
+	struct GsVServWrite **mWriteVec; size_t mWriteNum;
+	int *mWakeAsyncVec; size_t mWakeAsyncNum;
+};
+
+static int gs_vserv_write_create(
+	struct GsVServWrite **oWrite);
+static int gs_vserv_write_destroy(struct GsVServWrite *Write);
+static int gs_vserv_write_elt_del_free(uint8_t **DataBuf);
+static int gs_vserv_write_elt_del_sp_free(uint8_t *DataBuf);
+static int gs_vserv_write_drain_to(
+	struct GsVServWrite *Write,
+	int Fd,
+	int *oHaveEAGAIN);
+
 static int gs_vserv_epollctx_add_for(
 	int EPollFd,
 	size_t SockIdx,
@@ -38,6 +106,94 @@ static int gs_vserv_receive_evt_event(
 static int gs_vserv_receive_writable(
 	struct GsVServWork *Work,
 	struct GsEPollCtx *EPollCtx);
+
+int gs_vserv_write_create(
+	struct GsVServWrite **oWrite)
+{
+	int r = 0;
+
+	struct GsVServWrite *Write = NULL;
+
+	Write = new GsVServWrite();
+	Write->mTryAtOnce = false;
+	Write->mQueue;
+
+	if (oWrite)
+		*oWrite = GS_ARGOWN(&Write);
+
+clean:
+	GS_DELETE(&Write, struct GsVServWrite);
+
+	return r;
+}
+
+int gs_vserv_write_destroy(struct GsVServWrite *Write)
+{
+	if (Write) {
+		GS_DELETE(&Write, struct GsVServWrite);
+	}
+	return 0;
+}
+
+int gs_vserv_write_elt_del_free(uint8_t **DataBuf)
+{
+	if (*DataBuf) {
+		free(*DataBuf);
+		*DataBuf = NULL;
+	}
+	return 0;
+}
+
+int gs_vserv_write_elt_del_sp_free(uint8_t *DataBuf)
+{
+	free(DataBuf);
+	return 0;
+}
+
+/**
+	for epoll(2) EPOLLET edge-triggered mode specifically, writing until EAGAIN is important
+	  as no further EPOLLOUT (writability) events will be received otherwise (socket remains writable)
+*/
+int gs_vserv_write_drain_to(
+	struct GsVServWrite *Write,
+	int Fd,
+	int *oHaveEAGAIN)
+{
+	int r = 0;
+
+	int HaveEAGAIN = 0;
+
+	std::deque<GsVServWriteEntry>::iterator it;
+
+	if (Write->mQueue.empty())
+		GS_ERR_NO_CLEAN(0);
+
+	for (it = Write->mQueue.begin(); it != Write->mQueue.end(); ++it) {
+		ssize_t NSent = 0;
+		struct sockaddr_in SockAddr = {};
+		if (!!(r = gs_addr_sockaddr_in(&it->mAddr, &SockAddr)))
+			GS_GOTO_CLEAN();
+		while (-1 == (NSent = sendto(Fd, it->mElt.mData.get(), it->mElt.mLenData, MSG_NOSIGNAL, (struct sockaddr *) &SockAddr, sizeof SockAddr))) {
+			if (errno == EINTR)
+				continue;
+			if (errno == EAGAIN || errno == EWOULDBLOCK) {
+				HaveEAGAIN = 1;
+				goto donewriting;
+			}
+			GS_ERR_CLEAN(1);
+		}
+	}
+donewriting:
+	Write->mQueue.erase(Write->mQueue.begin(), it);
+
+noclean:
+	if (oHaveEAGAIN)
+		*oHaveEAGAIN = HaveEAGAIN;
+
+clean:
+
+	return r;
+}
 
 int gs_vserv_epollctx_add_for(
 	int EPollFd,
@@ -153,12 +309,12 @@ int gs_vserv_receive_writable(
 {
 	int r = 0;
 
-	const int Fd = Work->mSockFdVec[GS_MIN(EPollCtx->mSockIdx, Work->mSockFdNum - 1)];
 	struct GsVServWrite *Write = Work->mWriteVec[EPollCtx->mSockIdx];
+	int Fd = Work->mSockFdVec[EPollCtx->mSockIdx];
 
 	GS_ASSERT(Fd == EPollCtx->mFd);
 
-	if (!!(r = gs_vserv_write_drain_to(ServCtl, EPollCtx->mSockIdx, NULL)))
+	if (!!(r = gs_vserv_write_drain_to(Write, Fd, NULL)))
 		GS_GOTO_CLEAN();
 
 clean:
@@ -257,6 +413,71 @@ clean:
 	free(UdpBuf);
 
 	return r;
+}
+
+/** WARNING: this function is affected by caller CPU
+      the designed flow is: x-th receiver calls crank with 'Respond',
+	  crank on x-th receiver calls ex gs_vserv_respond_enqueue.
+	  maybe should just acquire mutexes */
+int gs_vserv_respond_enqueue(
+	struct GsVServRespond *Respond,
+	gs_data_deleter_sp_t DataDeleterSp,
+	uint8_t *DataBuf, size_t LenData, /*owned*/
+	const struct GsAddr **AddrVec, size_t LenAddrVec)
+{
+	int r = 0;
+
+	struct GsVServCtl *ServCtl = Respond->mServCtl;
+	struct GsVServWrite *Write = ServCtl->mWriteVec[Respond->mSockIdx];
+	int Fd = ServCtl->mSockFdVec[Respond->mSockIdx];
+
+	size_t NumWrite = 0;
+
+	/* feature may send some messages immediately */
+
+	if (Write->mTryAtOnce) {
+		for (size_t NumWrite = 0; NumWrite < LenAddrVec; NumWrite++) {
+			ssize_t NSent = 0;
+			struct sockaddr_in SockAddr = {};
+			if (!!(r = gs_addr_sockaddr_in(AddrVec[NumWrite], &SockAddr)))
+				GS_GOTO_CLEAN();
+			while (-1 == (NSent = sendto(Fd, DataBuf, LenData, MSG_NOSIGNAL, (struct sockaddr *) &SockAddr, sizeof SockAddr))) {
+				if (errno == EINTR)
+					continue;
+				if (errno == EAGAIN || errno == EWOULDBLOCK)
+					goto donewriting;
+				GS_ERR_CLEAN(1);
+			}
+		}
+	}
+
+donewriting:
+
+	/* queue any not yet sent */
+
+	if (NumWrite < LenAddrVec) {
+		std::shared_ptr<uint8_t> Sp(GS_ARGOWN(&DataBuf), DataDeleterSp);
+		for (size_t i = NumWrite; i < LenAddrVec; i++) {
+			struct GsVServWriteEntry Entry;
+			Entry.mAddr = *AddrVec[i];
+			Entry.mElt.mLenData = LenData;
+			Entry.mElt.mData = Sp;
+			Write->mQueue.push_back(std::move(Entry));
+		}
+	}
+
+clean:
+	GS_DELETE_F(&DataBuf, DataDeleterSp);
+
+	return r;
+}
+
+int gs_vserv_respond_enqueue_free(
+	struct GsVServRespond *Respond,
+	uint8_t *DataBuf, size_t LenData, /*owned*/
+	const struct GsAddr **AddrVec, size_t LenAddrVec)
+{
+	return gs_vserv_respond_enqueue(Respond, gs_vserv_write_elt_del_sp_free, DataBuf, LenData, AddrVec, LenAddrVec);
 }
 
 int gs_vserv_work_create(
