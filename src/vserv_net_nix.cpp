@@ -24,13 +24,12 @@
 #include <gittest/misc.h>
 #include <gittest/filesys.h>
 #include <gittest/log.h>
+#include <gittest/vserv_helpers_plat.h>
 #include <gittest/vserv_net.h>
 
 struct GsVServCtl
 {
-	size_t mNumThread;
-	pthread_t *mThreadVec; size_t mThreadNum;
-	pthread_t *mThreadMgmt; size_t mThreadMgmtNum;
+	struct GsVServThreads *mThreads;
 	struct GsVServQuitCtl *mQuitCtl;
 	struct GsVServWork *mWork;
 	// FIXME: no mMgmt - mCon provides access to what SHOULD be mMgmt via CbGetMgmt() (helper gs_vserv_ctl_get_mgmt())
@@ -38,12 +37,6 @@ struct GsVServCtl
 	struct GsVServCon *mCon; /*notowned*/ // FIXME: needs CbDestroy?
 	struct GsVServWorkCb mWorkCb;
 	struct GsVServMgmtCb mMgmtCb;
-};
-
-struct GsVServPthreadCtx
-{
-  struct GsVServCtl *mServCtl;
-  size_t mSockIdx;
 };
 
 static int gs_addr_sockaddr_in(const struct GsAddr *Addr, struct sockaddr_in *SockAddr);
@@ -192,19 +185,15 @@ int gs_vserv_ctl_create_part(
 	struct GsVServCtl *ServCtl = NULL;
 
 	ServCtl = new GsVServCtl();
-	ServCtl->mNumThread = ThreadNum;
-	ServCtl->mThreadNum = ThreadNum;
-	ServCtl->mThreadVec = new pthread_t[ThreadNum];
-	ServCtl->mThreadMgmtNum = 1;
-	ServCtl->mThreadMgmt = new pthread_t[1];
+	ServCtl->mThreads = NULL;
 	ServCtl->mQuitCtl = NULL;
 	ServCtl->mWork = NULL;
 	ServCtl->mCon = GS_ARGOWN(&Con);
 	ServCtl->mWorkCb = WorkCb;
 	ServCtl->mMgmtCb = MgmtCb;
 
-	if (! ServCtl->mThreadVec || ! ServCtl->mThreadMgmt)
-		GS_ERR_CLEAN(1);
+	if (!!(r = gs_vserv_threads_create(ThreadNum, &ServCtl->mThreads)))
+		GS_GOTO_CLEAN();
 
 	if (oServCtl)
 		*oServCtl = GS_ARGOWN(&ServCtl);
@@ -222,45 +211,26 @@ int gs_vserv_ctl_create_finish(
 {
 	int r = 0;
 
-	size_t ThreadsInitedCnt = 0;
-	bool AttrInited = false;
-	pthread_attr_t Attr = {};
-
 	/**/
 
+	GS_ASSERT(ServCtl->mQuitCtl == NULL);
+	GS_ASSERT(ServCtl->mWork    == NULL);
+
 	ServCtl->mQuitCtl = GS_ARGOWN(&QuitCtl);
-	ServCtl->mWork = GS_ARGOWN(&Work);
+	ServCtl->mWork    = GS_ARGOWN(&Work);
 
 	/* create threads */
 
-	if (!!(r = pthread_attr_init(&Attr)))
-		GS_GOTO_CLEAN();
-	AttrInited = true;
-
-	for (size_t i = 0; i < ServCtl->mNumThread; i++) {
-		struct GsVServPthreadCtx *Ctx = new GsVServPthreadCtx();
-		Ctx->mServCtl = ServCtl;
-		Ctx->mSockIdx = i;
-		if (!!(r = pthread_create(ServCtl->mThreadVec + i, &Attr, gs_vserv_work_func_pthread, Ctx)))
-			GS_GOTO_CLEAN();
-		Ctx = NULL;
-		ThreadsInitedCnt++;
-	}
-
+	if (!!(r = gs_vserv_threads_init_and_start(
+		ServCtl->mThreads,
+		ServCtl,
+		gs_vserv_work_func_pthread,
+		gs_vserv_mgmt_func_pthread)))
 	{
-		GS_ASSERT(ServCtl->mThreadMgmtNum == 1);
-		struct GsVServPthreadCtx *Ctx = new GsVServPthreadCtx();
-		Ctx->mServCtl = ServCtl;
-		Ctx->mSockIdx = -1;
-		if (!!(r = pthread_create(ServCtl->mThreadMgmt + 0, &Attr, gs_vserv_mgmt_func_pthread, Ctx)))
-			GS_GOTO_CLEAN();
-		Ctx = NULL;
+		GS_GOTO_CLEAN();
 	}
 
 clean:
-	if (AttrInited)
-		if (!!(r = pthread_attr_destroy(&Attr)))
-			GS_ASSERT(0);
 	GS_DELETE_F(&QuitCtl, gs_vserv_quit_ctl_destroy);
 	GS_DELETE_F(&Work, gs_vserv_work_destroy);
 
@@ -272,32 +242,9 @@ int gs_vserv_ctl_destroy(struct GsVServCtl *ServCtl)
 	int r = 0;
 
 	if (ServCtl) {
-		GS_DELETE_ARRAY(&ServCtl->mThreadVec, pthread_t);
-		GS_DELETE_ARRAY(&ServCtl->mThreadMgmt, pthread_t);
-
-		gs_close_cond(&ServCtl->mEvtFdExit);
-		gs_close_cond(&ServCtl->mEvtFdExitReq);
-
-		if (ServCtl->mWork) {
-			for (size_t i = 0; i < ServCtl->mSockFdNum; i++)
-				gs_close_cond(ServCtl->mSockFdVec + i);
-			GS_DELETE_ARRAY(&ServCtl->mSockFdVec, int);
-
-			for (size_t i = 0; i < ServCtl->mEPollFdNum; i++)
-				gs_close_cond(ServCtl->mEPollFdVec + i);
-			GS_DELETE_ARRAY(&ServCtl->mEPollFdVec, int);
-
-			for (size_t i = 0; i < ServCtl->mWriteNum; i++)
-				GS_DELETE_F(&ServCtl->mWriteVec[i], gs_vserv_write_destroy);
-			GS_DELETE_ARRAY(&ServCtl->mWriteVec, struct GsVServWrite *);
-
-			for (size_t i = 0; i < ServCtl->mWakeAsyncNum; i++)
-				gs_close_cond(ServCtl->mWakeAsyncVec + i);
-			GS_DELETE_ARRAY(&ServCtl->mWakeAsyncVec, int);
-
-			GS_DELETE(&ServCtl->mWork, struct GsVServWork);
-		}
-
+		GS_DELETE_F(&ServCtl->mThreads, gs_vserv_threads_destroy);
+		GS_DELETE_F(&ServCtl->mQuitCtl, gs_vserv_quit_ctl_destroy);
+		GS_DELETE_F(&ServCtl->mWork, gs_vserv_work_destroy);
 		GS_DELETE(&ServCtl, struct GsVServCtl);
 	}
 

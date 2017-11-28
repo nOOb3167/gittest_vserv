@@ -1,12 +1,23 @@
 #ifndef _VSERV_HELPERS_PLAY_H_
 #define _VSERV_HELPERS_PLAY_H_
 
+struct GsVServThreads;
 struct GsVServLock;
 struct GsVServQuitCtl;
 
 int gs_vserv_sockets_create(
 	const char *Port,
 	int *ioSockFdVec, size_t SockFdNum);
+
+int gs_vserv_threads_create(
+	size_t NumThread,
+	struct GsVServThreads **oThreads);
+int gs_vserv_threads_destroy(struct GsVServThreads *Threads);
+int gs_vserv_threads_init_and_start(
+	struct GsVServThreads *Threads,
+	struct GsVServCtl *ServCtl,
+	void *(*WorkFunc)(void *),
+	void *(*MgmtFunc)(void *));
 
 int gs_vserv_lock_create(struct GsVServLock **oLock);
 int gs_vserv_lock_destroy(struct GsVServLock *Lock);

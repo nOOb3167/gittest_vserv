@@ -14,6 +14,19 @@
 #include <gittest/filesys.h>
 #include <gittest/vserv_helpers_plat.h>
 
+struct GsVServPthreadCtx
+{
+	struct GsVServCtl *mServCtl;
+	size_t mSockIdx;
+};
+
+struct GsVServThreads
+{
+	size_t mNumThread;
+	pthread_t *mThreadVec; size_t mThreadNum;
+	pthread_t *mThreadMgmt; size_t mThreadMgmtNum;
+};
+
 struct GsVServLock
 {
 	pthread_mutex_t mMutex;
@@ -85,6 +98,91 @@ clean:
 	gs_close_cond(&TmpFd);
 	if (Res)
 		freeaddrinfo(Res);
+
+	return r;
+}
+
+int gs_vserv_threads_create(
+	size_t NumThread,
+	struct GsVServThreads **oThreads)
+{
+	int r = 0;
+
+	struct GsVServThreads *Threads = NULL;
+
+	pthread_t *ThreadVec = new pthread_t[NumThread];
+	pthread_t *ThreadMgmt = new pthread_t[1];
+
+	Threads = new GsVServThreads();
+	Threads->mNumThread = NumThread;
+	Threads->mThreadNum = NumThread;
+	Threads->mThreadVec = GS_ARGOWN(&ThreadVec);
+	Threads->mThreadMgmtNum = 1;
+	Threads->mThreadMgmt = GS_ARGOWN(&ThreadMgmt);
+
+	if (! ThreadVec || ! ThreadMgmt)
+		GS_ERR_CLEAN(1);
+
+	if (oThreads)
+		*oThreads = GS_ARGOWN(&Threads);
+
+clean:
+	GS_DELETE_ARRAY(&ThreadVec, pthread_t);
+	GS_DELETE_ARRAY(&ThreadMgmt, pthread_t);
+	GS_DELETE_F(&Threads, gs_vserv_threads_destroy);
+
+	return r;
+}
+
+int gs_vserv_threads_destroy(struct GsVServThreads *Threads)
+{
+	if (Threads) {
+		/* does nothing about any initialized pthread_t inside the vectors though */
+		GS_DELETE_ARRAY(&Threads->mThreadVec, pthread_t);
+		GS_DELETE_ARRAY(&Threads->mThreadMgmt, pthread_t);
+		GS_DELETE(&Threads, struct GsVServThreads);
+	}
+	return 0;
+}
+
+int gs_vserv_threads_init_and_start(
+	struct GsVServThreads *Threads,
+	struct GsVServCtl *ServCtl,
+	void *(*WorkFunc)(void *),
+	void *(*MgmtFunc)(void *))
+{
+	int r = 0;
+
+	pthread_attr_t Attr = {};
+	bool AttrInited = false;
+
+	if (!!(r = pthread_attr_init(&Attr)))
+		GS_GOTO_CLEAN();
+	AttrInited = true;
+
+	for (size_t i = 0; i < Threads->mThreadNum; i++) {
+		struct GsVServPthreadCtx *Ctx = new GsVServPthreadCtx();
+		Ctx->mServCtl = ServCtl;
+		Ctx->mSockIdx = i;
+		if (!!(r = pthread_create(Threads->mThreadVec + i, &Attr, WorkFunc, Ctx)))
+			GS_GOTO_CLEAN();
+		Ctx = NULL;
+	}
+
+	{
+		GS_ASSERT(Threads->mThreadMgmtNum == 1);
+		struct GsVServPthreadCtx *Ctx = new GsVServPthreadCtx();
+		Ctx->mServCtl = ServCtl;
+		Ctx->mSockIdx = -1;
+		if (!!(r = pthread_create(Threads->mThreadMgmt + 0, &Attr, MgmtFunc, Ctx)))
+			GS_GOTO_CLEAN();
+		Ctx = NULL;
+	}
+
+clean:
+	if (AttrInited)
+		if (!!(r = pthread_attr_destroy(&Attr)))
+			GS_ASSERT(0);
 
 	return r;
 }

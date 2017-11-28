@@ -19,7 +19,6 @@
 
 /* intended to be forward-declared in header (API use pointer only) */
 struct GsVServMgmt;
-struct GsVServLock;
 struct GsVServCtl;
 struct GsVServRespondM;
 
