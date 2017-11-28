@@ -38,6 +38,7 @@ int gs_vserv_quit_ctl_create(struct GsVServQuitCtl **oQuitCtl);
 int gs_vserv_quit_ctl_destroy(struct GsVServQuitCtl *QuitCtl);
 int gs_vserv_quit_ctl_reflect_evt_fd_exit(struct GsVServQuitCtl *QuitCtl, int *oFd);
 int gs_vserv_quit_ctl_request(struct GsVServQuitCtl *QuitCtl);
+int gs_vserv_quit_ctl_acknowledge(struct GsVServQuitCtl *QuitCtl);
 int gs_vserv_quit_ctl_wait_nt(struct GsVServQuitCtl *QuitCtl, size_t NumThread);
 
 #ifdef __cplusplus

@@ -435,7 +435,20 @@ clean:
 	return r;
 }
 
-/** NumThread: unfortunate abstraction leak - the evenfd QuitCtl implementation needs to know how many threads to signal */
+/** the eventfd QuitCtl implementation needs action be taken by thread recipient of signal */
+int gs_vserv_quit_ctl_acknowledge(struct GsVServQuitCtl *QuitCtl)
+{
+	int r = 0;
+
+	if (!!(r = gs_eventfd_read(QuitCtl->mEvtFdExit)))
+		GS_GOTO_CLEAN();
+
+clean:
+
+	return r;
+}
+
+/** NumThread: unfortunate abstraction leak - the eventfd QuitCtl implementation needs to know how many threads to signal */
 int gs_vserv_quit_ctl_wait_nt(struct GsVServQuitCtl *QuitCtl, size_t NumThread)
 {
 	int r = 0;

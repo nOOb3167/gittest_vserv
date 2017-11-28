@@ -80,6 +80,7 @@ struct GsVServRespond
 */
 struct GsVServWork
 {
+	struct GsVServQuitCtl *mQuitCtl;
 	int *mSockFdVec; size_t mSockFdNum;
 	int *mEPollFdVec; size_t mEPollFdNum;
 	struct GsVServWrite **mWriteVec; size_t mWriteNum;
@@ -281,11 +282,12 @@ int gs_vserv_receive_evt_event(
 {
 	int r = 0;
 
-	const int Fd = Work->mSockFdVec[GS_MIN(EPollCtx->mSockIdx, Work->mSockFdNum - 1)];
+	int EvtFdExit = -1;
 
-	GS_ASSERT(Fd == EPollCtx->mFd);
+	GS_ASSERT(! gs_vserv_quit_ctl_reflect_evt_fd_exit(Work->mQuitCtl, &EvtFdExit));
+	GS_ASSERT(EvtFdExit == EPollCtx->mFd);
 
-	if (!!(r = gs_eventfd_read(Fd)))
+	if (!!(r = gs_vserv_quit_ctl_acknowledge(Work->mQuitCtl)))
 		GS_GOTO_CLEAN();
 
 clean:
@@ -502,6 +504,7 @@ int gs_vserv_work_create(
 		GS_GOTO_CLEAN();
 
 	Work = new GsVServWork();
+	Work->mQuitCtl = GS_ARGOWN(&QuitCtl);
 	Work->mSockFdNum = 0;
 	Work->mSockFdVec = NULL;
 	Work->mEPollFdNum = 0;
