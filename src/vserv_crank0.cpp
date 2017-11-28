@@ -9,7 +9,7 @@
 
 #include <gittest/misc.h>
 #include <gittest/filesys.h>
-#include <gittest/vserv_enet_priv.h>
+#include <gittest/vserv_mgmt_priv.h>
 #include <gittest/vserv_work.h>
 #include <gittest/vserv_net.h>
 #include <gittest/vserv_crank0_priv.h>

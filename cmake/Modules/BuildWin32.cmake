@@ -2,15 +2,15 @@
 
 SET(GITTEST_PLAT_HEADERS_NIX
   include/gittest/vserv_crank0_priv.h
-  include/gittest/vserv_enet_priv.h
   include/gittest/vserv_helpers_plat.h
+  include/gittest/vserv_mgmt_priv.h
   include/gittest/vserv_work.h
   ${GITTEST_COMMON_HEADERS_NIX}
 )
 SET(GITTEST_PLAT_SOURCES_NIX
   src/vserv_crank0.cpp
-  src/vserv_enet.cpp
   src/vserv_helpers_plat.cpp
+  src/vserv_mgmt.cpp
   src/vserv_net_main.cpp
   src/vserv_net_nix.cpp
   src/vserv_work.cpp

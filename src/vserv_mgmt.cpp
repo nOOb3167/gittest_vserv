@@ -6,7 +6,7 @@
 #include <gittest/config.h>
 #include <gittest/vserv_net.h>
 #include <gittest/vserv_crank0_priv.h>
-#include <gittest/vserv_enet_priv.h>
+#include <gittest/vserv_mgmt_priv.h>
 
 #define GS_VSERV_ENET_ARBITRARY_CLIENT_MAX 128
 
