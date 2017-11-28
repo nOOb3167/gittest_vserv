@@ -4,6 +4,12 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#ifdef _MSC_VER
+#  include <malloc.h>  // alloca
+#else
+#  include <alloca.h>
+#endif
+
 #define GS_48KHZ 48000
 
 #define GS_NOALERR() do { GS_ASSERT(AL_NO_ERROR == alGetError()); } while(0)

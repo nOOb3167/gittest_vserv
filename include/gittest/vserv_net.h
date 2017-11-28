@@ -4,36 +4,14 @@
 #include <stddef.h>
 #include <cstdint>
 
-#ifdef _MSC_VER
-#  include <malloc.h>  // alloca
-#else
-#  include <alloca.h>
-#endif
-
 #include <gittest/config.h>
 #include <gittest/vserv_helpers.h>
 #include <gittest/vserv_helpers_plat.h>
 #include <gittest/vserv_work.h>
 
-#define GS_ADDR_RAWHASH_BUCKET(RAWHASH, NUM_BUCKETS) ((RAWHASH) % (NUM_BUCKETS))
-
-/* intended to be forward-declared in header (API use pointer only) */
-struct GsVServMgmt;
 struct GsVServCtl;
+struct GsVServMgmt;
 struct GsVServRespondM;
-
-struct GsAddr
-{
-	unsigned long long mSinFamily; /*AF_UNIX*/
-	unsigned long long mSinPort; /*host byte order*/
-	unsigned long long mSinAddr; /*host byte order*/
-};
-
-#ifdef __cplusplus
-struct gs_addr_hash_t { size_t operator()(const struct GsAddr &k) const; };
-struct gs_addr_equal_t { bool operator()(const GsAddr &a, const GsAddr &b) const; };
-struct gs_addr_less_t { bool operator()(const GsAddr &a, const GsAddr &b) const; };
-#endif /* __cplusplus */
 
 struct GsVServCon
 {
@@ -55,9 +33,6 @@ struct GsVServMgmtCb
 	/* called per-request */
 	int(*CbCrankM)(struct GsVServCtl *ServCtl, struct GsPacket *Packet, struct GsAddr *Addr, struct GsVServRespondM *Respond);
 };
-
-size_t gs_addr_rawhash(struct GsAddr *Addr);
-size_t gs_addr_port(struct GsAddr *Addr);
 
 int gs_vserv_ctl_create_part(
 	size_t ThreadNum,
