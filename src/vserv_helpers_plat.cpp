@@ -407,6 +407,15 @@ int gs_vserv_quit_ctl_destroy(struct GsVServQuitCtl *QuitCtl)
 	return 0;
 }
 
+/**
+  QuitCtl has a generic signal_quit()/waitfor_quit() api.
+  however this does not integrate well with the epoll loop.
+    (we want to interrupt an ongoing epoll_wait)
+  the epoll_wait call operates on FDs.
+  to interrupt an epoll_wait we signal a specific FD.
+  this function provides QuitCtl-implementation-specific API
+  to reflect the structure obtaining said specific FD.
+*/
 int gs_vserv_quit_ctl_reflect_evt_fd_exit(struct GsVServQuitCtl *QuitCtl, int *oFd)
 {
 	if (oFd)
