@@ -9,6 +9,7 @@
 struct GsVServMgmt
 {
 	struct GsAuxConfigCommonVars CommonVars;
+	struct GsVServQuitCtl *mQuitCtl;
 	ENetAddress mAddr;
 	ENetHost *mHost;
 };
@@ -22,6 +23,7 @@ struct GsVServRespondM
 int gs_vserv_mgmt_init();
 int gs_vserv_mgmt_create(
 	struct GsAuxConfigCommonVars *CommonVars,
+	struct GsVServQuitCtl *QuitCtl, /*notowned*/
 	struct GsVServMgmt **oMgmt);
 int gs_vserv_mgmt_destroy(struct GsVServMgmt *Mgmt);
 /*interface*/

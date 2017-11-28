@@ -9,9 +9,9 @@
 
 #include <gittest/misc.h>
 #include <gittest/filesys.h>
-#include <gittest/vserv_mgmt_priv.h>
-#include <gittest/vserv_work.h>
 #include <gittest/vserv_net.h>
+#include <gittest/vserv_work.h>
+#include <gittest/vserv_mgmt_priv.h>
 #include <gittest/vserv_crank0_priv.h>
 
 int gs_vserv_manage_id_create(struct GsVServManageId **oManageId)
@@ -200,17 +200,12 @@ int gs_vserv_con_ext_create(
 		GS_GOTO_CLEAN();
 
 	Ext = new GsVServConExt();
-	Ext->base.CbGetMgmt = gs_vserv_con_ext_getmgmt;
 	Ext->mCommonVars = *CommonVars;
 	Ext->mManageId = GS_ARGOWN(&ManageId);
 	Ext->mUsers;      /*dummy*/
 	Ext->mUserIdAddr; /*dummy*/
 	Ext->mGroupAll = sp<GsVServGroupAll>(GS_ARGOWN(&GroupAll), gs_vserv_groupall_destroy);
-	Ext->mMgmt = NULL;
 	Ext->mLock = NULL;
-
-	if (!!(r = gs_vserv_mgmt_create(CommonVars, &Ext->mMgmt)))
-		GS_GOTO_CLEAN();
 
 	if (!!(r = gs_vserv_lock_create(&Ext->mLock)))
 		GS_GOTO_CLEAN();
@@ -225,12 +220,6 @@ clean:
 	//GS_DELETE_F(&Ext, gs_vserv_con_ext_destroy);
 
 	return r;
-}
-
-struct GsVServMgmt * gs_vserv_con_ext_getmgmt(struct GsVServCon *Base)
-{
-	struct GsVServConExt *Ext = (struct GsVServConExt *) Base;
-	return Ext->mMgmt;
 }
 
 int gs_vserv_enqueue_idvec(
@@ -609,6 +598,7 @@ int gs_vserv_start_crank0(struct GsAuxConfigCommonVars *CommonVars)
 	struct GsVServMgmtCb MgmtCb = {};
 	struct GsVServQuitCtl *QuitCtl = NULL;
 	struct GsVServWork *Work = NULL;
+	struct GsVServMgmt *Mgmt = NULL;
 	struct GsVServCtl *ServCtl = NULL;
 
 	size_t ThreadNum = 1;
@@ -639,7 +629,10 @@ int gs_vserv_start_crank0(struct GsAuxConfigCommonVars *CommonVars)
 	if (!!(r = gs_vserv_work_create(ThreadNum, ServFd.data(), ServFd.size(), ServCtl, QuitCtl, &Work)))
 		GS_GOTO_CLEAN();
 
-	if (!!(r = gs_vserv_ctl_create_finish(ServCtl, GS_ARGOWN(&QuitCtl), GS_ARGOWN(&Work))))
+	if (!!(r = gs_vserv_mgmt_create(CommonVars, QuitCtl, &Mgmt)))
+		GS_GOTO_CLEAN();
+
+	if (!!(r = gs_vserv_ctl_create_finish(ServCtl, GS_ARGOWN(&QuitCtl), GS_ARGOWN(&Work), GS_ARGOWN(&Mgmt))))
 		GS_GOTO_CLEAN();
 
 	if (!!(r = gs_vserv_ctl_quit_wait(ServCtl)))

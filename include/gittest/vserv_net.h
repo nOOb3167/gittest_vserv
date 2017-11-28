@@ -15,7 +15,6 @@ struct GsVServRespondM;
 
 struct GsVServCon
 {
-	struct GsVServMgmt * (*CbGetMgmt)(struct GsVServCon *Base);
 };
 
 struct GsVServWorkCb
@@ -43,7 +42,8 @@ int gs_vserv_ctl_create_part(
 int gs_vserv_ctl_create_finish(
 	struct GsVServCtl *ServCtl,
 	struct GsVServQuitCtl *QuitCtl, /*owned*/
-	struct GsVServWork *Work /*owned*/);
+	struct GsVServWork *Work /*owned*/,
+	struct GsVServMgmt *Mgmt /*owned*/);
 int gs_vserv_ctl_destroy(struct GsVServCtl *ServCtl);
 int gs_vserv_ctl_quit_request(struct GsVServCtl *ServCtl);
 int gs_vserv_ctl_quit_wait(struct GsVServCtl *ServCtl);

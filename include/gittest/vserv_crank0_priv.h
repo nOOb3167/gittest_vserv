@@ -62,14 +62,11 @@ struct GsVServConExt
 	std::map<gs_vserv_user_id_t, GsAddr> mUserIdAddr;
 	sp<GsVServGroupAll> mGroupAll;
 
-	struct GsVServMgmt *mMgmt;  /*owned*/
-
 	struct GsVServLock *mLock; /*owned*/
 };
 
 int gs_vserv_con_ext_create(
 	struct GsAuxConfigCommonVars *CommonVars,
 	struct GsVServConExt **oExt);
-struct GsVServMgmt * gs_vserv_con_ext_getmgmt(struct GsVServCon *Base);
 
 #endif /* _VSERV_CRANK0_PRIV_H_ */

@@ -89,8 +89,6 @@ struct GsVServWork
 static int gs_vserv_write_create(
 	struct GsVServWrite **oWrite);
 static int gs_vserv_write_destroy(struct GsVServWrite *Write);
-static int gs_vserv_write_elt_del_free(uint8_t **DataBuf);
-static int gs_vserv_write_elt_del_sp_free(uint8_t *DataBuf);
 static int gs_vserv_write_drain_to(
 	struct GsVServWrite *Write,
 	int Fd,
@@ -139,21 +137,6 @@ int gs_vserv_write_destroy(struct GsVServWrite *Write)
 	if (Write) {
 		GS_DELETE(&Write, struct GsVServWrite);
 	}
-	return 0;
-}
-
-int gs_vserv_write_elt_del_free(uint8_t **DataBuf)
-{
-	if (*DataBuf) {
-		free(*DataBuf);
-		*DataBuf = NULL;
-	}
-	return 0;
-}
-
-int gs_vserv_write_elt_del_sp_free(uint8_t *DataBuf)
-{
-	free(DataBuf);
 	return 0;
 }
 
@@ -420,6 +403,21 @@ clean:
 	free(UdpBuf);
 
 	return r;
+}
+
+int gs_vserv_write_elt_del_free(uint8_t **DataBuf)
+{
+	if (*DataBuf) {
+		free(*DataBuf);
+		*DataBuf = NULL;
+	}
+	return 0;
+}
+
+int gs_vserv_write_elt_del_sp_free(uint8_t *DataBuf)
+{
+	free(DataBuf);
+	return 0;
 }
 
 /** WARNING: this function is affected by caller CPU

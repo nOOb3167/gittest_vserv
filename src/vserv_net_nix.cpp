@@ -10,6 +10,8 @@
 #include <gittest/filesys.h>
 #include <gittest/log.h>
 #include <gittest/vserv_helpers_plat.h>
+#include <gittest/vserv_work.h>
+#include <gittest/vserv_mgmt_priv.h>
 #include <gittest/vserv_net.h>
 
 struct GsVServCtl
@@ -17,6 +19,7 @@ struct GsVServCtl
 	struct GsVServThreads *mThreads;
 	struct GsVServQuitCtl *mQuitCtl;
 	struct GsVServWork *mWork;
+	struct GsVServMgmt *mMgmt;
 	// FIXME: no mMgmt - mCon provides access to what SHOULD be mMgmt via CbGetMgmt() (helper gs_vserv_ctl_get_mgmt())
 	/* shared (work&mgmt) context */
 	struct GsVServCon *mCon; /*notowned*/ // FIXME: needs CbDestroy?
@@ -91,7 +94,8 @@ clean:
 int gs_vserv_ctl_create_finish(
 	struct GsVServCtl *ServCtl,
 	struct GsVServQuitCtl *QuitCtl, /*owned*/
-	struct GsVServWork *Work /*owned*/)
+	struct GsVServWork *Work /*owned*/,
+	struct GsVServMgmt *Mgmt /*owned*/)
 {
 	int r = 0;
 
@@ -102,6 +106,7 @@ int gs_vserv_ctl_create_finish(
 
 	ServCtl->mQuitCtl = GS_ARGOWN(&QuitCtl);
 	ServCtl->mWork    = GS_ARGOWN(&Work);
+	ServCtl->mMgmt    = GS_ARGOWN(&Mgmt);
 
 	/* create threads */
 
@@ -117,6 +122,7 @@ int gs_vserv_ctl_create_finish(
 clean:
 	GS_DELETE_F(&QuitCtl, gs_vserv_quit_ctl_destroy);
 	GS_DELETE_F(&Work, gs_vserv_work_destroy);
+	GS_DELETE_F(&Mgmt, gs_vserv_mgmt_destroy);
 
 	return r;
 }
@@ -171,7 +177,7 @@ struct GsVServWork * gs_vserv_ctl_get_work(struct GsVServCtl *ServCtl)
 
 struct GsVServMgmt * gs_vserv_ctl_get_mgmt(struct GsVServCtl *ServCtl)
 {
-	return ServCtl->mCon->CbGetMgmt(ServCtl->mCon);
+	return ServCtl->mMgmt;
 }
 
 struct GsVServCon * gs_vserv_ctl_get_con(struct GsVServCtl *ServCtl)

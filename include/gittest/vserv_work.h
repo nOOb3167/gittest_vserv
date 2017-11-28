@@ -23,6 +23,9 @@ int gs_vserv_receive_func(
 	struct GsVServCtl *ServCtl,
 	size_t SockIdx);
 
+int gs_vserv_write_elt_del_free(uint8_t **DataBuf);
+int gs_vserv_write_elt_del_sp_free(uint8_t *DataBuf);
+
 int gs_vserv_respond_enqueue(
 	struct GsVServRespond *Respond,
 	gs_data_deleter_sp_t DataDeleterSp,

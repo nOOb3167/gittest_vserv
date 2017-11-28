@@ -25,6 +25,7 @@ int gs_vserv_mgmt_init()
 
 int gs_vserv_mgmt_create(
 	struct GsAuxConfigCommonVars *CommonVars,
+	struct GsVServQuitCtl *QuitCtl, /*notowned*/
 	struct GsVServMgmt **oMgmt)
 {
 	int r = 0;
@@ -45,6 +46,7 @@ int gs_vserv_mgmt_create(
 		GS_ERR_CLEAN(1);
 
 	Mgmt = new GsVServMgmt();
+	Mgmt->mQuitCtl = GS_ARGOWN(&QuitCtl);
 	Mgmt->mAddr = Addr;
 	Mgmt->mHost = GS_ARGOWN(&Host);
 
@@ -53,14 +55,17 @@ int gs_vserv_mgmt_create(
 
 clean:
 	enet_host_destroy(Host);
-	GS_DELETE(&Mgmt, struct GsVServMgmt);
+	GS_DELETE_F(&Mgmt, gs_vserv_mgmt_destroy);
 
 	return r;
 }
 
 int gs_vserv_mgmt_destroy(struct GsVServMgmt *Mgmt)
 {
-	GS_DELETE(&Mgmt, struct GsVServMgmt);
+	if (Mgmt) {
+		enet_host_destroy(Mgmt->mHost);
+		GS_DELETE(&Mgmt, struct GsVServMgmt);
+	}
 	return 0;
 }
 
@@ -72,7 +77,7 @@ int gs_vserv_mgmt_receive_func(
 
 	struct GsVServConExt *Ext = (struct GsVServConExt *) gs_vserv_ctl_get_con(ServCtl);
 	struct GsVServMgmtCb *MgmtCb = (struct GsVServMgmtCb *) gs_vserv_ctl_get_mgmtcb(ServCtl);
-	struct GsVServMgmt *Mgmt = gs_vserv_con_ext_getmgmt(&Ext->base);
+	struct GsVServMgmt *Mgmt = gs_vserv_ctl_get_mgmt(ServCtl);
 
 	const size_t TimeoutGenerationMax = 4; /* [0,4] interval */
 	uint32_t TimeoutGenerationVec[]    = { 1,  5,  10, 20,  500 };
