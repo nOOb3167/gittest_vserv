@@ -18,6 +18,7 @@ struct GsVServPthreadCtx
 {
 	struct GsVServCtl *mServCtl;
 	size_t mSockIdx;
+	int(*CbFunc)(struct GsVServCtl *ServCtl, size_t SockIdx);
 };
 
 struct GsVServThreads
@@ -38,6 +39,49 @@ struct GsVServQuitCtl
 	int mEvtFdExitReq;
 	int mEvtFdExit;
 };
+
+static void * gs_vserv_work_func_pthread(
+	void *arg);
+static void * gs_vserv_mgmt_func_pthread(
+	void *arg);
+
+void * gs_vserv_work_func_pthread(
+	void *arg)
+{
+	int r = 0;
+
+	struct GsVServPthreadCtx *Ctx = (struct GsVServPthreadCtx *) arg;
+
+	if (!!(r = Ctx->CbFunc(Ctx->mServCtl, Ctx->mSockIdx)))
+		GS_GOTO_CLEAN();
+
+clean:
+	GS_DELETE(&Ctx, struct GsVServPthreadCtx);
+
+	if (!!r)
+		GS_ASSERT(0);
+
+	return NULL;
+}
+
+void * gs_vserv_mgmt_func_pthread(
+	void *arg)
+{
+	int r = 0;
+
+	struct GsVServPthreadCtx *Ctx = (struct GsVServPthreadCtx *) arg;
+
+	if (!!(r = Ctx->CbFunc(Ctx->mServCtl, Ctx->mSockIdx)))
+		GS_GOTO_CLEAN();
+
+clean:
+	GS_DELETE(&Ctx, struct GsVServPthreadCtx);
+
+	if (!!r)
+		GS_ASSERT(0);
+
+	return NULL;
+}
 
 int gs_vserv_sockets_create(
 	const char *Port,
@@ -148,8 +192,8 @@ int gs_vserv_threads_destroy(struct GsVServThreads *Threads)
 int gs_vserv_threads_init_and_start(
 	struct GsVServThreads *Threads,
 	struct GsVServCtl *ServCtl,
-	void *(*WorkFunc)(void *),
-	void *(*MgmtFunc)(void *))
+	int(*WorkFunc)(struct GsVServCtl *ServCtl, size_t SockIdx),
+	int(*MgmtFunc)(struct GsVServCtl *ServCtl, size_t SockIdx))
 {
 	int r = 0;
 
@@ -164,7 +208,8 @@ int gs_vserv_threads_init_and_start(
 		struct GsVServPthreadCtx *Ctx = new GsVServPthreadCtx();
 		Ctx->mServCtl = ServCtl;
 		Ctx->mSockIdx = i;
-		if (!!(r = pthread_create(Threads->mThreadVec + i, &Attr, WorkFunc, Ctx)))
+		Ctx->CbFunc = WorkFunc;
+		if (!!(r = pthread_create(Threads->mThreadVec + i, &Attr, gs_vserv_work_func_pthread, Ctx)))
 			GS_GOTO_CLEAN();
 		Ctx = NULL;
 	}
@@ -174,7 +219,8 @@ int gs_vserv_threads_init_and_start(
 		struct GsVServPthreadCtx *Ctx = new GsVServPthreadCtx();
 		Ctx->mServCtl = ServCtl;
 		Ctx->mSockIdx = -1;
-		if (!!(r = pthread_create(Threads->mThreadMgmt + 0, &Attr, MgmtFunc, Ctx)))
+		Ctx->CbFunc = MgmtFunc;
+		if (!!(r = pthread_create(Threads->mThreadMgmt + 0, &Attr, gs_vserv_mgmt_func_pthread, Ctx)))
 			GS_GOTO_CLEAN();
 		Ctx = NULL;
 	}

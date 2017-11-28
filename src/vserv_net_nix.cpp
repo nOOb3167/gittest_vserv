@@ -42,10 +42,8 @@ struct GsVServCtl
 static int gs_addr_sockaddr_in(const struct GsAddr *Addr, struct sockaddr_in *SockAddr);
 static int gs_eventfd_read(int EvtFd);
 static int gs_eventfd_write(int EvtFd, int Value);
-static void * gs_vserv_work_func_pthread(
-	void *arg);
-static void * gs_vserv_mgmt_func_pthread(
-	void *arg);
+static int gs_vserv_thread_func_work(struct GsVServCtl *ServCtl, size_t SockIdx);
+static int gs_vserv_thread_func_mgmt(struct GsVServCtl *ServCtl, size_t SockIdx);
 
 size_t gs_addr_hash_t::operator()(const struct GsAddr &k) const {
 	// FIXME: https://stackoverflow.com/questions/35985960/c-why-is-boosthash-combine-the-best-way-to-combine-hash-values
@@ -126,14 +124,9 @@ clean:
   return 0;
 }
 
-void * gs_vserv_work_func_pthread(
-	void *arg)
+int gs_vserv_thread_func_work(struct GsVServCtl *ServCtl, size_t SockIdx)
 {
 	int r = 0;
-
-	struct GsVServPthreadCtx *Ctx = (struct GsVServPthreadCtx *) arg;
-	struct GsVServCtl *ServCtl = Ctx->mServCtl;
-	size_t SockIdx = Ctx->mSockIdx;
 
 	log_guard_t Log(GS_LOG_GET("serv"));
 
@@ -141,23 +134,15 @@ void * gs_vserv_work_func_pthread(
 		GS_GOTO_CLEAN();
 
 clean:
-	GS_DELETE(&Ctx, struct GsVServPthreadCtx);
 
-	if (!!r)
-		GS_ASSERT(0);
-
-	return NULL;
+	return r;
 }
 
-void * gs_vserv_mgmt_func_pthread(
-	void *arg)
+int gs_vserv_thread_func_mgmt(struct GsVServCtl *ServCtl, size_t SockIdx)
 {
 	int r = 0;
 
-	struct GsVServPthreadCtx *Ctx = (struct GsVServPthreadCtx *) arg;
-	struct GsVServCtl *ServCtl = Ctx->mServCtl;
-	
-	GS_ASSERT(Ctx->mSockIdx == -1);
+	GS_ASSERT(SockIdx == -1);
 
 	log_guard_t Log(GS_LOG_GET("mgmt"));
 
@@ -165,12 +150,8 @@ void * gs_vserv_mgmt_func_pthread(
 		GS_GOTO_CLEAN();
 
 clean:
-	GS_DELETE(&Ctx, struct GsVServPthreadCtx);
 
-	if (!!r)
-		GS_ASSERT(0);
-
-	return NULL;
+	return r;
 }
 
 int gs_vserv_ctl_create_part(
@@ -224,8 +205,8 @@ int gs_vserv_ctl_create_finish(
 	if (!!(r = gs_vserv_threads_init_and_start(
 		ServCtl->mThreads,
 		ServCtl,
-		gs_vserv_work_func_pthread,
-		gs_vserv_mgmt_func_pthread)))
+		gs_vserv_thread_func_work,
+		gs_vserv_thread_func_mgmt)))
 	{
 		GS_GOTO_CLEAN();
 	}

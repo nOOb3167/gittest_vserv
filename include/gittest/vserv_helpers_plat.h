@@ -16,8 +16,8 @@ int gs_vserv_threads_destroy(struct GsVServThreads *Threads);
 int gs_vserv_threads_init_and_start(
 	struct GsVServThreads *Threads,
 	struct GsVServCtl *ServCtl,
-	void *(*WorkFunc)(void *),
-	void *(*MgmtFunc)(void *));
+	int(*WorkFunc)(struct GsVServCtl *ServCtl, size_t SockIdx),
+	int(*MgmtFunc)(struct GsVServCtl *ServCtl, size_t SockIdx));
 
 int gs_vserv_lock_create(struct GsVServLock **oLock);
 int gs_vserv_lock_destroy(struct GsVServLock *Lock);
