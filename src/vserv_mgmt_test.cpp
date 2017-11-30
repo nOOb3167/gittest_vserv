@@ -60,10 +60,20 @@ int gs_vserv_enet_send_reliable(ENetPeer *Peer, struct GsPacket *Packet)
 		- fail and take ownership        -> caller MUST NOT destroy
 		- fail and do not take ownership -> caller MUST destroy
 	   the two fail cases impose contradictory requirements wrt destruction.
-	   for now just assume enet_peer_send always takes ownership, leaking the packet in some cases. */
+	   for now just assume enet_peer_send always takes ownership, leaking the packet in some cases.
+	   FIXME: UPON FURTHER INSPECTION THE ABOVE IS INACCURATE
+	     enet_peer_send fucks with the packet reference count.
+		 BUT enet_packet_destroy _does_ _not_ _even_ _check_ _it_ .
+		 further, critically, enet_peer_send codepaths seem to take care
+		 to always succeed after incrementing the packet reference count.
+		 therefore the revised enet_peer_send behaviours:
+		  - succeed and take ownership     -> caller MUST NOT destroy
+		  - fail and do not take ownership -> caller MUST destroy
+	*/
 
-	if (!!(r = enet_peer_send(Peer, 0, GS_ARGOWN(&Pkt))))
+	if (!!(r = enet_peer_send(Peer, 0, Pkt)))
 		GS_GOTO_CLEAN();
+	Pkt = NULL;
 
 clean:
 	if (Pkt)

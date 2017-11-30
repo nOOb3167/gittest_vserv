@@ -65,12 +65,14 @@ struct GsEPollCtx
 };
 
 /** @sa
-		::gs_vserv_respond_enqueue
-		::gs_vserv_respond_enqueue_free
+		::gs_vserv_respond_work_cb_respond
+		::gs_vserv_respond_work_enqueue
+		::gs_vserv_respond_work_enqueue_free
 */
-struct GsVServRespond
+struct GsVServRespondWork
 {
-	struct GsVServCtl *mServCtl;
+	struct GsVServRespond base;
+	struct GsVServWork *mWork;
 	size_t mSockIdx;
 };
 
@@ -101,6 +103,19 @@ static int gs_vserv_epollctx_add_for(
 	int Fd,
 	enum GsSockType Type,
 	struct GsVServCtl *ServCtl);
+static int gs_vserv_respond_work_cb_respond(
+	struct GsVServRespond *RespondBase,
+	uint8_t *DataBuf, size_t LenData, /*owned*/
+	const struct GsAddr **AddrVec, size_t LenAddrVec);
+static int gs_vserv_respond_work_enqueue(
+	struct GsVServRespondWork *Respond,
+	gs_data_deleter_sp_t DataDeleterSp,
+	uint8_t *DataBuf, size_t LenData, /*owned*/
+	const struct GsAddr **AddrVec, size_t LenAddrVec);
+static int gs_vserv_respond_work_enqueue_free(
+	struct GsVServRespondWork *Respond,
+	uint8_t *DataBuf, size_t LenData, /*owned*/
+	const struct GsAddr **AddrVec, size_t LenAddrVec);
 static int gs_vserv_receive_evt_normal(
 	struct GsVServWork *Work,
 	struct GsVServCtl *ServCtl,
@@ -220,6 +235,81 @@ clean:
 	return r;
 }
 
+int gs_vserv_respond_work_cb_respond(
+	struct GsVServRespond *RespondBase,
+	uint8_t *DataBuf, size_t LenData, /*owned*/
+	const struct GsAddr **AddrVec, size_t LenAddrVec)
+{
+	struct GsVServRespondWork *Respond = (struct GsVServRespondWork *) RespondBase;
+
+	return gs_vserv_respond_work_enqueue_free(Respond, DataBuf, LenData, AddrVec, LenAddrVec);
+}
+
+/** WARNING: this function is affected by caller CPU
+      the designed flow is: x-th receiver calls crank with 'Respond',
+	  crank on x-th receiver calls ex gs_vserv_respond_enqueue.
+	  maybe should just acquire mutexes */
+int gs_vserv_respond_work_enqueue(
+	struct GsVServRespondWork *Respond,
+	gs_data_deleter_sp_t DataDeleterSp,
+	uint8_t *DataBuf, size_t LenData, /*owned*/
+	const struct GsAddr **AddrVec, size_t LenAddrVec)
+{
+	int r = 0;
+
+	struct GsVServWork *Work = Respond->mWork;
+	struct GsVServWrite *Write = Work->mWriteVec[Respond->mSockIdx];
+	int Fd = Work->mSockFdVec[Respond->mSockIdx];
+
+	size_t NumWrite = 0;
+
+	/* feature may send some messages immediately */
+
+	if (Write->mTryAtOnce) {
+		for (size_t NumWrite = 0; NumWrite < LenAddrVec; NumWrite++) {
+			ssize_t NSent = 0;
+			struct sockaddr_in SockAddr = {};
+			if (!!(r = gs_addr_sockaddr_in(AddrVec[NumWrite], &SockAddr)))
+				GS_GOTO_CLEAN();
+			while (-1 == (NSent = sendto(Fd, DataBuf, LenData, MSG_NOSIGNAL, (struct sockaddr *) &SockAddr, sizeof SockAddr))) {
+				if (errno == EINTR)
+					continue;
+				if (errno == EAGAIN || errno == EWOULDBLOCK)
+					goto donewriting;
+				GS_ERR_CLEAN(1);
+			}
+		}
+	}
+
+donewriting:
+
+	/* queue any not yet sent */
+
+	if (NumWrite < LenAddrVec) {
+		std::shared_ptr<uint8_t> Sp(GS_ARGOWN(&DataBuf), DataDeleterSp);
+		for (size_t i = NumWrite; i < LenAddrVec; i++) {
+			struct GsVServWriteEntry Entry;
+			Entry.mAddr = *AddrVec[i];
+			Entry.mElt.mLenData = LenData;
+			Entry.mElt.mData = Sp;
+			Write->mQueue.push_back(std::move(Entry));
+		}
+	}
+
+clean:
+	GS_DELETE_F(&DataBuf, DataDeleterSp);
+
+	return r;
+}
+
+int gs_vserv_respond_work_enqueue_free(
+	struct GsVServRespondWork *Respond,
+	uint8_t *DataBuf, size_t LenData, /*owned*/
+	const struct GsAddr **AddrVec, size_t LenAddrVec)
+{
+	return gs_vserv_respond_work_enqueue(Respond, gs_vserv_write_elt_del_sp_free, DataBuf, LenData, AddrVec, LenAddrVec);
+}
+
 int gs_vserv_receive_evt_normal(
 	struct GsVServWork *Work,
 	struct GsVServCtl *ServCtl,
@@ -242,7 +332,7 @@ int gs_vserv_receive_evt_normal(
 		socklen_t SockAddrSize = sizeof SockAddr;
 		struct GsPacket Packet = {};
 		struct GsAddr Addr = {};
-		struct GsVServRespond Respond = {};
+		struct GsVServRespondWork Respond = {};
 		while (-1 == (NRecv = recvfrom(Fd, UdpBuf, UdpSize, MSG_TRUNC, (struct sockaddr *)&SockAddr, &SockAddrSize))) {
 			if (errno == EINTR)
 				continue;
@@ -264,9 +354,10 @@ int gs_vserv_receive_evt_normal(
 		Addr.mSinFamily = SockAddr.sin_family;
 		Addr.mSinPort = ntohs(SockAddr.sin_port);
 		Addr.mSinAddr = ntohl(SockAddr.sin_addr.s_addr);
-		Respond.mServCtl = ServCtl;
+		Respond.base.CbRespond = gs_vserv_respond_work_cb_respond;
+		Respond.mWork = Work;
 		Respond.mSockIdx = EPollCtx->mSockIdx;
-		if (!!(r = WorkCb->CbCrank(ServCtl, &Packet, &Addr, &Respond)))
+		if (!!(r = WorkCb->CbCrank(ServCtl, &Packet, &Addr, &Respond.base)))
 			GS_GOTO_CLEAN();
 	}
 donereading:
@@ -420,71 +511,6 @@ int gs_vserv_write_elt_del_sp_free(uint8_t *DataBuf)
 {
 	free(DataBuf);
 	return 0;
-}
-
-/** WARNING: this function is affected by caller CPU
-      the designed flow is: x-th receiver calls crank with 'Respond',
-	  crank on x-th receiver calls ex gs_vserv_respond_enqueue.
-	  maybe should just acquire mutexes */
-int gs_vserv_respond_enqueue(
-	struct GsVServRespond *Respond,
-	gs_data_deleter_sp_t DataDeleterSp,
-	uint8_t *DataBuf, size_t LenData, /*owned*/
-	const struct GsAddr **AddrVec, size_t LenAddrVec)
-{
-	int r = 0;
-
-	struct GsVServCtl *ServCtl = Respond->mServCtl;
-	struct GsVServWrite *Write = ServCtl->mWriteVec[Respond->mSockIdx];
-	int Fd = ServCtl->mSockFdVec[Respond->mSockIdx];
-
-	size_t NumWrite = 0;
-
-	/* feature may send some messages immediately */
-
-	if (Write->mTryAtOnce) {
-		for (size_t NumWrite = 0; NumWrite < LenAddrVec; NumWrite++) {
-			ssize_t NSent = 0;
-			struct sockaddr_in SockAddr = {};
-			if (!!(r = gs_addr_sockaddr_in(AddrVec[NumWrite], &SockAddr)))
-				GS_GOTO_CLEAN();
-			while (-1 == (NSent = sendto(Fd, DataBuf, LenData, MSG_NOSIGNAL, (struct sockaddr *) &SockAddr, sizeof SockAddr))) {
-				if (errno == EINTR)
-					continue;
-				if (errno == EAGAIN || errno == EWOULDBLOCK)
-					goto donewriting;
-				GS_ERR_CLEAN(1);
-			}
-		}
-	}
-
-donewriting:
-
-	/* queue any not yet sent */
-
-	if (NumWrite < LenAddrVec) {
-		std::shared_ptr<uint8_t> Sp(GS_ARGOWN(&DataBuf), DataDeleterSp);
-		for (size_t i = NumWrite; i < LenAddrVec; i++) {
-			struct GsVServWriteEntry Entry;
-			Entry.mAddr = *AddrVec[i];
-			Entry.mElt.mLenData = LenData;
-			Entry.mElt.mData = Sp;
-			Write->mQueue.push_back(std::move(Entry));
-		}
-	}
-
-clean:
-	GS_DELETE_F(&DataBuf, DataDeleterSp);
-
-	return r;
-}
-
-int gs_vserv_respond_enqueue_free(
-	struct GsVServRespond *Respond,
-	uint8_t *DataBuf, size_t LenData, /*owned*/
-	const struct GsAddr **AddrVec, size_t LenAddrVec)
-{
-	return gs_vserv_respond_enqueue(Respond, gs_vserv_write_elt_del_sp_free, DataBuf, LenData, AddrVec, LenAddrVec);
 }
 
 int gs_vserv_work_create(

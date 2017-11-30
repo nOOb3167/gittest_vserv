@@ -573,7 +573,7 @@ clean:
 	return r;
 }
 
-int gs_vserv_crankm0(struct GsVServCtl *ServCtl, struct GsPacket *Packet, struct GsAddr *Addr, struct GsVServRespondM *Respond)
+int gs_vserv_crankm0(struct GsVServCtl *ServCtl, struct GsPacket *Packet, struct GsAddr *Addr, struct GsVServRespond *Respond)
 {
 	int r = 0;
 

@@ -10,11 +10,18 @@
 #include <gittest/vserv_work.h>
 
 struct GsVServCtl;
-struct GsVServMgmt;
-struct GsVServRespondM;
+struct GsVServMgmt;  // FIXME: create public mgmt header
 
 struct GsVServCon
 {
+};
+
+struct GsVServRespond
+{
+	int(*CbRespond)(
+		struct GsVServRespond *RespondBase,
+		uint8_t *DataBuf, size_t LenData, /*owned*/
+		const struct GsAddr **AddrVec, size_t LenAddrVec);
 };
 
 struct GsVServWorkCb
@@ -30,7 +37,7 @@ struct GsVServMgmtCb
 	/* ServCtl->mThreadMgmt thread is made call this on start */
 	int(*CbThreadFuncM)(struct GsVServCtl *ServCtl);
 	/* called per-request */
-	int(*CbCrankM)(struct GsVServCtl *ServCtl, struct GsPacket *Packet, struct GsAddr *Addr, struct GsVServRespondM *Respond);
+	int(*CbCrankM)(struct GsVServCtl *ServCtl, struct GsPacket *Packet, struct GsAddr *Addr, struct GsVServRespond *Respond);
 };
 
 int gs_vserv_ctl_create_part(

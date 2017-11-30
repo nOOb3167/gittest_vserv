@@ -16,7 +16,6 @@ typedef int (*gs_data_deleter_t)(uint8_t **Data);
 /* single indirection version of gs_data_deleter_t */
 typedef int (*gs_data_deleter_sp_t)(uint8_t *Data);
 
-struct GsVServRespond;
 struct GsVServWork;
 
 int gs_vserv_receive_func(
@@ -25,16 +24,6 @@ int gs_vserv_receive_func(
 
 int gs_vserv_write_elt_del_free(uint8_t **DataBuf);
 int gs_vserv_write_elt_del_sp_free(uint8_t *DataBuf);
-
-int gs_vserv_respond_enqueue(
-	struct GsVServRespond *Respond,
-	gs_data_deleter_sp_t DataDeleterSp,
-	uint8_t *DataBuf, size_t LenData, /*owned*/
-	const struct GsAddr **AddrVec, size_t LenAddrVec);
-int gs_vserv_respond_enqueue_free(
-	struct GsVServRespond *Respond,
-	uint8_t *DataBuf, size_t LenData, /*owned*/
-	const struct GsAddr **AddrVec, size_t LenAddrVec);
 
 int gs_vserv_work_create(
 	size_t ThreadNum,
