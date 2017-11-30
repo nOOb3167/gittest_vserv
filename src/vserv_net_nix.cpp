@@ -194,3 +194,18 @@ struct GsVServMgmtCb * gs_vserv_ctl_get_mgmtcb(struct GsVServCtl *ServCtl)
 {
 	return &ServCtl->mMgmtCb;
 }
+
+int gs_vserv_respond_enqueue_idvec_free(
+	struct GsVServRespond *RespondBase,
+	uint8_t *DataBuf, size_t LenData, /*owned*/
+	const struct GsAddr **AddrVec, size_t LenAddrVec)
+{
+	int r = 0;
+
+	if (!!(r = RespondBase->CbRespond(RespondBase, DataBuf, LenData, AddrVec, LenAddrVec)))
+		GS_GOTO_CLEAN();
+
+clean:
+
+	return r;
+}

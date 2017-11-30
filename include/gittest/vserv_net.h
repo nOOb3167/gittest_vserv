@@ -16,8 +16,12 @@ struct GsVServCon
 {
 };
 
+/** @sa
+		::gs_vserv_respond_enqueue_idvec_free
+*/
 struct GsVServRespond
 {
+	/* DataBuf is owned - is to be released by free(2) */
 	int(*CbRespond)(
 		struct GsVServRespond *RespondBase,
 		uint8_t *DataBuf, size_t LenData, /*owned*/
@@ -59,6 +63,11 @@ struct GsVServMgmt *   gs_vserv_ctl_get_mgmt(struct GsVServCtl *ServCtl);
 struct GsVServCon *    gs_vserv_ctl_get_con(struct GsVServCtl *ServCtl);
 struct GsVServWorkCb * gs_vserv_ctl_get_workcb(struct GsVServCtl *ServCtl);
 struct GsVServMgmtCb * gs_vserv_ctl_get_mgmtcb(struct GsVServCtl *ServCtl);
+
+int gs_vserv_respond_enqueue_idvec_free(
+	struct GsVServRespond *RespondBase,
+	uint8_t *DataBuf, size_t LenData, /*owned*/
+	const struct GsAddr **AddrVec, size_t LenAddrVec);
 
 /**/
 
