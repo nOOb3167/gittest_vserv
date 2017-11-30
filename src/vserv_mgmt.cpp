@@ -88,7 +88,7 @@ int gs_vserv_respond_mgmt_enqueue_reliable_free(
 	DataBuf = NULL;	
 
 	for (size_t NumWrite = 0; NumWrite < LenAddrVec; NumWrite++) {
-		if (Mgmt->mAddrPeerMap.find(*AddrVec[NumWrite]) == Mgmt->mAddrPeerMap.end)
+		if (Mgmt->mAddrPeerMap.find(*AddrVec[NumWrite]) == Mgmt->mAddrPeerMap.end())
 			GS_ERR_CLEAN(1);
 		if (!!(r = enet_peer_send(Mgmt->mAddrPeerMap[*AddrVec[NumWrite]], 0, Pkt)))
 			GS_GOTO_CLEAN();

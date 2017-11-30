@@ -461,14 +461,14 @@ int gs_vserv_receive_func(
 				{
 					if (!!(r = gs_vserv_receive_evt_normal(Work, EPollCtx->mServCtl, EPollCtx, UdpBuf, UdpSize)))
 						GS_GOTO_CLEAN();
-					if (!!(r = gs_vserv_receive_writable(EPollCtx->mServCtl, EPollCtx)))
+					if (!!(r = gs_vserv_receive_writable(Work, EPollCtx)))
 						GS_GOTO_CLEAN();
 				}
 				break;
 
 				case GS_SOCK_TYPE_EVENT:
 				{
-					if (!!(r = gs_vserv_receive_evt_event(EPollCtx->mServCtl, EPollCtx)))
+					if (!!(r = gs_vserv_receive_evt_event(Work, EPollCtx)))
 						GS_GOTO_CLEAN();
 					GS_ERR_NO_CLEAN(0);
 				}
@@ -492,7 +492,7 @@ int gs_vserv_receive_func(
 
 				case GS_SOCK_TYPE_NORMAL:
 				{
-					if (!!(r = gs_vserv_receive_writable(EPollCtx->mServCtl, EPollCtx)))
+					if (!!(r = gs_vserv_receive_writable(Work, EPollCtx)))
 						GS_GOTO_CLEAN();
 				}
 				break;
