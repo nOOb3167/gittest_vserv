@@ -206,15 +206,15 @@ int gs_vserv_threads_create(
 	pthread_t *ThreadVec = new pthread_t[NumThread];
 	pthread_t *ThreadMgmt = new pthread_t[1];
 
+	if (! ThreadVec || ! ThreadMgmt)
+		GS_ERR_CLEAN(1);
+
 	Threads = new GsVServThreads();
 	Threads->mNumThread = NumThread;
 	Threads->mThreadNum = NumThread;
 	Threads->mThreadVec = GS_ARGOWN(&ThreadVec);
 	Threads->mThreadMgmtNum = 1;
 	Threads->mThreadMgmt = GS_ARGOWN(&ThreadMgmt);
-
-	if (! ThreadVec || ! ThreadMgmt)
-		GS_ERR_CLEAN(1);
 
 	if (oThreads)
 		*oThreads = GS_ARGOWN(&Threads);

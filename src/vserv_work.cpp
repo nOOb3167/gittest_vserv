@@ -574,6 +574,13 @@ int gs_vserv_work_create(
 		if (!!(r = gs_vserv_write_create(&Work->mWriteVec[i])))
 			GS_GOTO_CLEAN();
 
+	/* meant to interrupt a sleeping worker (inside ex epoll_wait) */
+
+	for (size_t i = 0; i < ThreadNum; i++) {
+		if (-1 == (Work->mWakeAsyncVec[i] = eventfd(0, EFD_CLOEXEC | EFD_SEMAPHORE)))
+			GS_ERR_CLEAN(1);
+	}
+
 	/* create epoll sets */
 
 	for (size_t i = 0; i < ThreadNum; i++)
@@ -590,13 +597,6 @@ int gs_vserv_work_create(
 			GS_GOTO_CLEAN();
 		if (!!(r = gs_vserv_epollctx_add_for(Work->mEPollFdVec[i], -1, Work->mWakeAsyncVec[i], GS_SOCK_TYPE_WAKE, ServCtl)))
 			GS_GOTO_CLEAN();
-	}
-
-	/* meant to interrupt a sleeping worker (inside ex epoll_wait) */
-
-	for (size_t i = 0; i < ThreadNum; i++) {
-		if (-1 == (Work->mWakeAsyncVec[i] = eventfd(0, EFD_CLOEXEC | EFD_SEMAPHORE)))
-			GS_ERR_CLEAN(1);
 	}
 
 	if (oWork)

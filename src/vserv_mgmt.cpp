@@ -182,9 +182,11 @@ int gs_vserv_mgmt_receive_func(
 			GS_ERR_CLEAN(1);
 
 		/* timeout - if too many, switch to next timeout generation */
-		if (HostServiceRet == 0)
+		if (HostServiceRet == 0) {
 			if ((++TimeoutGenerationCnt % TimeoutGenerationCntVec[TimeoutGeneration]) == 0)
 				TimeoutGeneration = GS_MIN(TimeoutGeneration + 1, TimeoutGenerationMax);
+			continue;
+		}
 
 		switch (Evt.type)
 		{
