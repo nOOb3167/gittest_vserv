@@ -45,23 +45,12 @@ struct GsVServQuitCtl
 	int mEvtFdExit;
 };
 
-static int gs_addr_sockaddr_in(const struct GsAddr *Addr, struct sockaddr_in *SockAddr);
 static int gs_eventfd_read(int EvtFd);
 static int gs_eventfd_write(int EvtFd, int Value);
 static void * gs_vserv_work_func_pthread(
 	void *arg);
 static void * gs_vserv_mgmt_func_pthread(
 	void *arg);
-
-int gs_addr_sockaddr_in(const struct GsAddr *Addr, struct sockaddr_in *SockAddr)
-{
-	if (Addr->mSinFamily != AF_INET)
-		return 1;
-	SockAddr->sin_family = AF_INET;
-	SockAddr->sin_port = htons(Addr->mSinPort);
-	SockAddr->sin_addr.s_addr = htonl(Addr->mSinAddr);
-	return 0;
-}
 
 int gs_eventfd_read(int EvtFd)
 {

@@ -89,6 +89,8 @@ struct GsVServWork
 	int *mWakeAsyncVec; size_t mWakeAsyncNum;
 };
 
+static int gs_addr_sockaddr_in(const struct GsAddr *Addr, struct sockaddr_in *SockAddr);
+
 static int gs_vserv_write_create(
 	struct GsVServWrite **oWrite);
 static int gs_vserv_write_destroy(struct GsVServWrite *Write);
@@ -127,6 +129,16 @@ static int gs_vserv_receive_evt_event(
 static int gs_vserv_receive_writable(
 	struct GsVServWork *Work,
 	struct GsEPollCtx *EPollCtx);
+
+int gs_addr_sockaddr_in(const struct GsAddr *Addr, struct sockaddr_in *SockAddr)
+{
+	if (Addr->mSinFamily != AF_INET)
+		return 1;
+	SockAddr->sin_family = AF_INET;
+	SockAddr->sin_port = htons(Addr->mSinPort);
+	SockAddr->sin_addr.s_addr = htonl(Addr->mSinAddr);
+	return 0;
+}
 
 int gs_vserv_write_create(
 	struct GsVServWrite **oWrite)
