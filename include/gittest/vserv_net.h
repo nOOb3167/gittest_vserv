@@ -17,7 +17,7 @@ struct GsVServCon
 };
 
 /** @sa
-		::gs_vserv_respond_enqueue_idvec_free
+		::gs_vserv_respond_enqueue_addrvec_free
 */
 struct GsVServRespond
 {
@@ -64,7 +64,7 @@ struct GsVServCon *    gs_vserv_ctl_get_con(struct GsVServCtl *ServCtl);
 struct GsVServWorkCb * gs_vserv_ctl_get_workcb(struct GsVServCtl *ServCtl);
 struct GsVServMgmtCb * gs_vserv_ctl_get_mgmtcb(struct GsVServCtl *ServCtl);
 
-int gs_vserv_respond_enqueue_idvec_free(
+int gs_vserv_respond_enqueue_addrvec_free(
 	struct GsVServRespond *RespondBase,
 	uint8_t *DataBuf, size_t LenData, /*owned*/
 	const struct GsAddr **AddrVec, size_t LenAddrVec);

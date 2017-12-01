@@ -243,7 +243,7 @@ int gs_vserv_enqueue_idvec(
 		else
 			AddrVec[TmpCnt++] = &itb->second;
 	}
-	if (!!(r = gs_vserv_respond_enqueue_idvec_free(Respond, GS_ARGOWN(&PacketCpy), LenPacketCpy, AddrVec, TmpCnt)))
+	if (!!(r = gs_vserv_respond_enqueue_addrvec_free(Respond, GS_ARGOWN(&PacketCpy), LenPacketCpy, AddrVec, TmpCnt)))
 		GS_GOTO_CLEAN();
 
 clean:
@@ -425,7 +425,7 @@ int gs_vserv_crank0(struct GsVServCtl *ServCtl, struct GsPacket *Packet, struct 
 			GS_GOTO_CLEAN_J(broadcast);
 		for (auto it = Ext->mUsers.begin(); it != Ext->mUsers.end(); ++it)
 			AddrVec[TmpCnt++] = &it->first;
-		if (!!(r = gs_vserv_respond_enqueue_idvec_free(Respond, GS_ARGOWN(&PacketCpy), LenPacketCpy, AddrVec, TmpCnt)))
+		if (!!(r = gs_vserv_respond_enqueue_addrvec_free(Respond, GS_ARGOWN(&PacketCpy), LenPacketCpy, AddrVec, TmpCnt)))
 			GS_GOTO_CLEAN_J(broadcast);
 
 	clean_broadcast:
