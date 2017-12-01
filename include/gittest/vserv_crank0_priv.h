@@ -25,6 +25,8 @@ enum GsVServCmd {
 	GS_VSERV_CMD_IDENT_ACK = 'I',
 	GS_VSERV_CMD_NAMEGET = 'n',
 	GS_VSERV_CMD_NAMES = 'N',
+	GS_VSERV_CMD_IDGET = 'd',
+	GS_VSERV_CMD_IDS   = 'D',
 };
 
 enum GsVServGroupMode

@@ -92,6 +92,30 @@ int gs_vserv_groupall_destroy(struct GsVServGroupAll *GroupAll)
 	return 0;
 }
 
+int gs_vserv_groupall_check_basic(struct GsVServGroupAll *GroupAll)
+{
+	int r = 0;
+
+	std::set<gs_vserv_user_id_t> Uniq;
+	size_t Cnt = 0;
+
+	for (size_t i = 0; i < GroupAll->mIdNum; i++)
+		Uniq.insert(GroupAll->mIdVec[i]);
+
+	if (Uniq.size() != GroupAll->mIdNum)
+		GS_ERR_CLEAN(1);
+
+	for (size_t i = 0; i < GroupAll->mSizeNum; i++)
+		Cnt += GroupAll->mSizeVec[i];
+
+	if (Cnt != GroupAll->mIdNum)
+		GS_ERR_CLEAN(1);
+
+clean:
+
+	return r;
+}
+
 int gs_vserv_groupall_cache_refresh(struct GsVServGroupAll *GroupAll)
 {
 	int r = 0;
@@ -413,13 +437,13 @@ int gs_vserv_crank0(struct GsVServCtl *ServCtl, struct GsPacket *Packet, struct 
 	if (!!(r = gs_vserv_lock_lock(Ext->mLock)))
 		GS_GOTO_CLEAN();
 
-	GS_LOG(I, PF, "pkt [%d]", (int)Packet->dataLength);
-
 	if (!!(r = gs_vserv_crank_identify(Ext, Packet, Addr, Respond, &User)))
 		GS_GOTO_CLEAN();
 
 	if (gs_packet_space(Packet, 0, 1))
 		GS_ERR_CLEAN(1);
+
+	GS_LOG(I, PF, "pkt [%d]", (int)Packet->data[0]);
 
 	switch (Packet->data[0]) {
 
@@ -512,58 +536,6 @@ int gs_vserv_crank0(struct GsVServCtl *ServCtl, struct GsPacket *Packet, struct 
 
 	clean_broadcast:
 		GS_DELETE_F(&PacketCpy, gs_vserv_write_elt_del_sp_free);
-		if (!!r)
-			GS_GOTO_CLEAN();
-	}
-	break;
-
-	case GS_VSERV_M_CMD_GROUPSET:
-	{
-		/* (cmd)[1], (idnum)[4], (sznum)[4], (idvec[idnum])[2*idnum], (szvec[sznum])(2*sznum) */
-
-		struct GsVServGroupAll *GroupAll = NULL;
-
-		size_t Offset = 0;
-
-		uint32_t IdNum = 0;
-		uint32_t SizeNum = 0;
-		gs_vserv_user_id_t *IdVec = NULL;
-		uint16_t *SizeVec = NULL;
-
-		if (gs_packet_space(Packet, (Offset += 1), 4 /*idnum*/ + 4 /*sznum*/))
-			GS_ERR_CLEAN_J(groupset, 1);
-
-		IdNum = gs_read_uint(Packet->data + Offset);
-		SizeNum = gs_read_uint(Packet->data + Offset + 4);
-
-		if (gs_packet_space(Packet, (Offset += 8), 2 * IdNum /*idvec*/ + 2 * SizeNum /*szvec*/))
-			GS_ERR_CLEAN_J(groupset, 1);
-
-		if (!(IdVec = (gs_vserv_user_id_t *)malloc(sizeof *IdVec * IdNum)))
-			GS_ERR_CLEAN_J(groupset, 1);
-
-		if (!(SizeVec = (uint16_t *)malloc(sizeof *SizeVec * SizeNum)))
-			GS_ERR_CLEAN_J(groupset, 1);
-
-		for (size_t i = 0; i < IdNum; i++)
-			IdVec[i] = gs_read_short(Packet->data + Offset + (2 * i));
-
-		for (size_t i = 0; i < SizeNum; i++)
-			SizeVec[i] = gs_read_short(Packet->data + Offset + (2 * IdNum) + (2 * i));
-
-		/* processing */
-
-		if (!!(r = gs_vserv_groupall_create(GS_ARGOWN(&IdVec), IdNum, GS_ARGOWN(&SizeVec), SizeNum, &GroupAll)))
-			GS_GOTO_CLEAN_J(groupset);
-
-		if (!!(r = gs_vserv_groupall_cache_refresh(GroupAll)))
-			GS_GOTO_CLEAN_J(groupset);
-
-		// FIXME: state mutation
-		Ext->mGroupAll = sp<GsVServGroupAll>(GS_ARGOWN(&GroupAll), gs_vserv_groupall_destroy);
-
-	clean_groupset:
-		GS_DELETE_F(&GroupAll, gs_vserv_groupall_destroy);
 		if (!!r)
 			GS_GOTO_CLEAN();
 	}
@@ -663,6 +635,142 @@ int gs_vserv_crankm0(struct GsVServCtl *ServCtl, struct GsPacket *Packet, struct
 
 	if (!!(r = gs_vserv_lock_lock(Ext->mLock)))
 		GS_GOTO_CLEAN();
+
+	if (gs_packet_space(Packet, 0, 1))
+		GS_ERR_CLEAN(1);
+
+	GS_LOG(I, PF, "pkt [%d]", (int)Packet->data[0]);
+
+	switch (Packet->data[0]) {
+
+	case GS_VSERV_M_CMD_GROUPSET:
+	{
+		/* (cmd)[1], (idnum)[4], (sznum)[4], (idvec[idnum])[2*idnum], (szvec[sznum])(2*sznum) */
+
+		struct GsVServGroupAll *GroupAll = NULL;
+
+		size_t Offset = 0;
+
+		uint32_t IdNum = 0;
+		uint32_t SizeNum = 0;
+		gs_vserv_user_id_t *IdVec = NULL;
+		uint16_t *SizeVec = NULL;
+
+		if (gs_packet_space(Packet, (Offset += 1), 4 /*idnum*/ + 4 /*sznum*/))
+			GS_ERR_CLEAN_J(groupset, 1);
+
+		IdNum = gs_read_uint(Packet->data + Offset);
+		SizeNum = gs_read_uint(Packet->data + Offset + 4);
+
+		if (gs_packet_space(Packet, (Offset += 8), 2 * IdNum /*idvec*/ + 2 * SizeNum /*szvec*/))
+			GS_ERR_CLEAN_J(groupset, 1);
+
+		if (!(IdVec = (gs_vserv_user_id_t *)malloc(sizeof *IdVec * IdNum)))
+			GS_ERR_CLEAN_J(groupset, 1);
+
+		if (!(SizeVec = (uint16_t *)malloc(sizeof *SizeVec * SizeNum)))
+			GS_ERR_CLEAN_J(groupset, 1);
+
+		for (size_t i = 0; i < IdNum; i++)
+			IdVec[i] = gs_read_short(Packet->data + Offset + (2 * i));
+
+		for (size_t i = 0; i < SizeNum; i++)
+			SizeVec[i] = gs_read_short(Packet->data + Offset + (2 * IdNum) + (2 * i));
+
+		/* processing */
+
+		if (!!(r = gs_vserv_groupall_create(GS_ARGOWN(&IdVec), IdNum, GS_ARGOWN(&SizeVec), SizeNum, &GroupAll)))
+			GS_GOTO_CLEAN_J(groupset);
+
+		if (!!(r = gs_vserv_groupall_check_basic(GroupAll)))
+			GS_GOTO_CLEAN_J(groupset);
+
+		if (!!(r = gs_vserv_groupall_cache_refresh(GroupAll)))
+			GS_GOTO_CLEAN_J(groupset);
+
+		// FIXME: state mutation
+		Ext->mGroupAll = sp<GsVServGroupAll>(GS_ARGOWN(&GroupAll), gs_vserv_groupall_destroy);
+
+	clean_groupset:
+		GS_DELETE_F(&GroupAll, gs_vserv_groupall_destroy);
+		if (!!r)
+			GS_GOTO_CLEAN();
+	}
+	break;
+
+	case GS_VSERV_CMD_IDGET:
+	{
+		/* (cmd)[1], (generation)[4] */
+
+		size_t Offset = 0;
+		uint32_t Generation = 0;
+		size_t TmpCnt = 0;
+		size_t IdNum = 0;
+		gs_vserv_user_id_t *IdVec = NULL;
+
+		struct GsPacket PacketOut = {};
+		size_t OffsetOut = 0;
+
+		if (gs_packet_space(Packet, (Offset += 1), 4 /*generation*/))
+			GS_ERR_CLEAN_J(idget, 1);
+
+		Generation = gs_read_uint(Packet->data + Offset);
+
+		Offset += 4;
+
+		// FIXME: maybe it is better to source IDs from mGroupAll ?
+		IdNum = Ext->mUserIdAddr.size();
+		GS_ALLOCA_ASSIGN(IdVec, gs_vserv_user_id_t, IdNum);
+
+		for (auto it = Ext->mUserIdAddr.begin(); it != Ext->mUserIdAddr.end() && TmpCnt < IdNum; ++it, ++TmpCnt)
+			IdVec[TmpCnt] = it->first;
+		GS_ASSERT(TmpCnt == IdNum);
+
+		/* (cmd)[1], (generation)[4], (idnum)[4], (idvec)[2*idnum] */
+
+		PacketOut.dataLength = GS_VSERV_NAMELEN_ARBITRARY_SIZE_MAX;
+		GS_ALLOCA_ASSIGN(PacketOut.data, uint8_t, PacketOut.dataLength);
+
+		if (gs_packet_space(&PacketOut, (OffsetOut), 1 /*cmd*/))
+			GS_ERR_CLEAN_J(idget, 1);
+
+		gs_write_byte(PacketOut.data + OffsetOut, GS_VSERV_CMD_IDS);
+
+		if (gs_packet_space(&PacketOut, (OffsetOut += 1), 4 /*generation*/ + 4 /*idnum*/))
+			GS_ERR_CLEAN_J(idget, 1);
+
+		// FIXME: implement generation properly (on ID source data structure)
+		gs_write_uint(PacketOut.data + OffsetOut + 0, Generation + 1);
+		gs_write_uint(PacketOut.data + OffsetOut + 4, IdNum);
+
+		OffsetOut += 8; /* rest filled with idvec */
+
+		for (size_t i = 0; i < IdNum; i++) {
+			if (gs_packet_space(&PacketOut, (OffsetOut), 2 /*id*/))
+				GS_ERR_CLEAN_J(idget, 1);
+			gs_write_short(PacketOut.data + OffsetOut, IdVec[i]);
+			Offset += 2;
+		}
+
+		/* adjust packet to real length (vs maximum allowed) */
+
+		PacketOut.dataLength = Offset;
+
+		/* respond */
+
+		if (!!(r = gs_vserv_enqueue_oneshot(Respond, &PacketOut, Addr)))
+			GS_GOTO_CLEAN_J(idget);
+
+	clean_idget:
+		if (!!r)
+			GS_GOTO_CLEAN();
+	}
+	break;
+
+	default:
+		GS_ASSERT(0);
+
+	}
 
 clean:
 	GS_RELEASE_F(Ext->mLock, gs_vserv_lock_release);
