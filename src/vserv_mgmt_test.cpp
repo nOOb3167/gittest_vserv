@@ -20,7 +20,7 @@
 #define GS_MGMT_ARBITRARY_EVT_MAX 64 /* how many dequeued at most per-iteration */
 #define GS_MGMT_ONE_TICK_MS 20
 
-struct GsVServMgmt
+struct GsVServClntMgmt
 {
 	ENetAddress mAddr;
 	ENetHost *mHost;
@@ -33,6 +33,8 @@ struct GsVServMgmt
 };
 
 static int gs_vserv_enet_init();
+
+GsLogList *g_gs_log_list_global = gs_log_list_global_create();
 
 int gs_vserv_enet_init()
 {
@@ -83,7 +85,7 @@ clean:
 }
 
 int gs_vserv_mgmt_crank0(
-	struct GsVServMgmt *Mgmt,
+	struct GsVServClntMgmt *Mgmt,
 	long long TimeStamp,
 	struct GsPacket *Packet)
 {
@@ -168,7 +170,7 @@ clean:
 }
 
 int gs_vserv_mgmt_update(
-	struct GsVServMgmt *Mgmt,
+	struct GsVServClntMgmt *Mgmt,
 	long long TimeStamp,
 	bool WaitIndicatesEventArrived,
 	ENetEvent *Evt /*owned*/)
@@ -207,7 +209,7 @@ clean:
 	return r;
 }
 
-void threadfunc(struct GsVServMgmt *Mgmt)
+void threadfunc(struct GsVServClntMgmt *Mgmt)
 {
 	int r = 0;
 
@@ -247,7 +249,7 @@ int stuff(struct GsAuxConfigCommonVars *CommonVars)
 
 	std::random_device RandDev;
 
-	struct GsVServMgmt *Mgmt = NULL;
+	struct GsVServClntMgmt *Mgmt = NULL;
 
 	ENetAddress Addr = {};
 	ENetHost *Host = NULL;
@@ -266,7 +268,7 @@ int stuff(struct GsAuxConfigCommonVars *CommonVars)
 	if (!(Peer = enet_host_connect(Host, &Addr, 1, 0)))
 		GS_ERR_CLEAN(1);
 
-	Mgmt = new GsVServMgmt();
+	Mgmt = new GsVServClntMgmt();
 	Mgmt->mAddr = Addr;
 	Mgmt->mHost = GS_ARGOWN(&Host);
 	Mgmt->mPeer = GS_ARGOWN(&Peer);
