@@ -252,6 +252,156 @@ clean:
 	return r;
 }
 
+int gs_vserv_enqueue_oneshot(
+	struct GsVServRespond *Respond,
+	struct GsPacket *Packet,
+	const struct GsAddr *Addr)
+{
+	int r = 0;
+
+	uint8_t *PacketCpy = NULL;
+	size_t LenPacketCpy = 0;
+
+	if (!!(r = gs_packet_copy_create(Packet, &PacketCpy, &LenPacketCpy)))
+		GS_GOTO_CLEAN();
+	if (!!(r = gs_vserv_respond_enqueue_addrvec_free(Respond, GS_ARGOWN(&PacketCpy), LenPacketCpy, &Addr, 1)))
+		GS_GOTO_CLEAN();
+
+clean:
+	GS_DELETE_F(&PacketCpy, gs_vserv_write_elt_del_sp_free);
+
+	return r;
+}
+
+int gs_vserv_crank_identify_parse_ident(
+	struct GsPacket *Packet,
+	struct GsVServUser **oUserPartial /*id invalid*/,
+	uint32_t *oRand)
+{
+	int r = 0;
+
+	/* (cmd)[1], (rand)[4], (lenname)[4], (lenserv)[4], (name)[lenname], (serv)[lenserv] */
+
+	struct GsVServUser *UserPartial = NULL;
+
+	size_t Offset = 0;
+	uint32_t Rand = 0;
+	uint8_t *NameBuf = NULL; uint32_t LenName = 0;
+	uint8_t *ServBuf = NULL; uint32_t LenServ = 0;
+
+	if (gs_packet_space(Packet, 0, 1) || Packet->data[0] != GS_VSERV_CMD_IDENT)
+		GS_ERR_CLEAN(1);
+
+	if (gs_packet_space(Packet, (Offset += 1), 4 /*rand*/ + 4 /*lenname*/ + 4 /*lenserv*/))
+		GS_ERR_CLEAN(1);
+
+	Rand = gs_read_uint(Packet->data + Offset + 0);
+	LenName = gs_read_uint(Packet->data + Offset + 4);
+	LenServ = gs_read_uint(Packet->data + Offset + 8);
+
+	if (gs_packet_space(Packet, (Offset += 12), LenName + LenServ))
+		GS_ERR_CLEAN(1);
+
+	if (!(NameBuf = (uint8_t *)malloc(LenName)))
+		GS_ERR_CLEAN(1);
+
+	if (!(ServBuf = (uint8_t *)malloc(LenServ)))
+		GS_ERR_CLEAN(1);
+
+	memcpy(NameBuf, Packet->data + Offset, LenName);
+	memcpy(ServBuf, Packet->data + Offset + LenName, LenServ);
+
+	if (!!(r = gs_vserv_user_create(&UserPartial)))
+		GS_GOTO_CLEAN();
+
+	UserPartial->mNameBuf = GS_ARGOWN(&NameBuf); UserPartial->mLenName = LenName;
+	UserPartial->mServBuf = GS_ARGOWN(&ServBuf); UserPartial->mLenServ = LenServ;
+	UserPartial->mId = GS_VSERV_USER_ID_INVALID;
+
+	if (oUserPartial)
+		*oUserPartial = GS_ARGOWN(&UserPartial);
+
+	if (oRand)
+		*oRand = Rand;
+
+clean:
+	GS_DELETE_F(&UserPartial, gs_vserv_user_destroy);
+
+	return r;
+}
+
+int gs_vserv_crank_identify_respond_ident_ack(
+	struct GsAddr *Addr,
+	struct GsVServRespond *Respond,
+	uint32_t UserRand,
+	gs_vserv_user_id_t UserId)
+{
+	int r = 0;
+
+	/* (cmd)[1], (rand)[4], (id)[2] */
+
+	uint8_t IdentAckBuf[7] = {};
+	struct GsPacket PacketOut = { IdentAckBuf, 7 };
+
+	if (gs_packet_space(&PacketOut, 0, 1 /*cmd*/ + 4 /*rand*/ + 2 /*id*/))
+		GS_ERR_CLEAN(1);
+
+	gs_write_byte(IdentAckBuf + 0, GS_VSERV_CMD_IDENT_ACK);
+	gs_write_uint(IdentAckBuf + 1, UserRand);
+	gs_write_uint(IdentAckBuf + 5, UserId);
+
+	if (!!(r = gs_vserv_enqueue_oneshot(Respond, &PacketOut, Addr)))
+		GS_GOTO_CLEAN();
+
+clean:
+
+	return r;
+}
+
+int gs_vserv_crank_identify(
+	struct GsVServConExt *Ext,
+	struct GsPacket *Packet,
+	struct GsAddr *Addr,
+	struct GsVServRespond *Respond,
+	sp<GsVServUser> *oUser)
+{
+	int r = 0;
+
+	auto it = Ext->mUsers.find(*Addr);
+
+	struct GsVServUser *NewUser = NULL;
+	uint32_t UserRand = 0;
+
+	/* return existing */
+	if (it != Ext->mUsers.end())
+		GS_ERR_NO_CLEAN(0);
+
+	/* missing - must be ident. create new. */
+	if (!!(r = gs_vserv_crank_identify_parse_ident(Packet, &NewUser, &UserRand)))
+		GS_GOTO_CLEAN();
+	GS_ASSERT(NewUser->mId == GS_VSERV_USER_ID_INVALID);
+	if (!!(r = gs_vserv_user_genid(NewUser, Ext->mManageId)))
+		GS_GOTO_CLEAN();
+	// FIXME: from here on, something needs to release the generated Id on failure
+	/* acknowledge new */
+	if (!!(r = gs_vserv_crank_identify_respond_ident_ack(Addr, Respond, UserRand, NewUser->mId)))
+		GS_GOTO_CLEAN();
+	/* insert new */
+	Ext->mUserIdAddr.insert(std::make_pair(NewUser->mId, *Addr));
+	it = Ext->mUsers.insert(std::make_pair(*Addr, sp<GsVServUser>(GS_ARGOWN(&NewUser), gs_vserv_user_destroy))).first;
+
+	GS_LOG(I, PF, "newcon [addr=%X, port=%d, id=%d]", (unsigned int)gs_addr_addr(Addr), (int)gs_addr_port(Addr), (int)Ext->mUsers[*Addr]->mId);
+
+noclean:
+	if (oUser)
+		*oUser = it->second;
+
+clean:
+	GS_DELETE_F(&NewUser, gs_vserv_user_destroy);
+
+	return r;
+}
+
 int gs_vserv_crank0(struct GsVServCtl *ServCtl, struct GsPacket *Packet, struct GsAddr *Addr, struct GsVServRespond *Respond)
 {
 	int r = 0;
@@ -265,20 +415,8 @@ int gs_vserv_crank0(struct GsVServCtl *ServCtl, struct GsPacket *Packet, struct 
 
 	GS_LOG(I, PF, "pkt [%d]", (int)Packet->dataLength);
 
-	if (Ext->mUsers.find(*Addr) == Ext->mUsers.end()) {
-		struct GsVServUser *User = NULL;
-		if (!!(r = gs_vserv_user_create(&User)))
-			GS_GOTO_CLEAN_J(user);
-		if (!!(r = gs_vserv_user_genid(User, Ext->mManageId)))
-			GS_GOTO_CLEAN_J(user);
-		Ext->mUserIdAddr[User->mId] = *Addr;
-		Ext->mUsers[*Addr] = sp<GsVServUser>(GS_ARGOWN(&User), gs_vserv_user_destroy);
-		GS_LOG(I, PF, "newcon [port=%d, id=%d]", (int) gs_addr_port(Addr), (int) Ext->mUsers[*Addr]->mId);
-	clean_user:
-		GS_DELETE_F(&User, gs_vserv_user_destroy);
-	}
-
-	User = Ext->mUsers[*Addr];
+	if (!!(r = gs_vserv_crank_identify(Ext, Packet, Addr, Respond, &User)))
+		GS_GOTO_CLEAN();
 
 	if (gs_packet_space(Packet, 0, 1))
 		GS_ERR_CLEAN(1);
@@ -287,64 +425,8 @@ int gs_vserv_crank0(struct GsVServCtl *ServCtl, struct GsPacket *Packet, struct 
 
 	case GS_VSERV_CMD_IDENT:
 	{
-		/* (cmd)[1], (rand)[4], (lenname)[4], (lenserv)[4], (name)[lenname], (serv)[lenserv] */
-
-		struct GsVServUser *UserN = NULL;
-
-		size_t Offset = 0;
-		uint32_t Rand = 0;
-		uint32_t LenName = 0;
-		uint32_t LenServ = 0;
-		uint8_t *NameBuf = NULL;
-		uint8_t *ServBuf = NULL;
-
-		uint8_t IdentAckBuf[7] = {};
-		struct GsPacket PacketOut = { IdentAckBuf, 7 };
-
-		if (gs_packet_space(Packet, (Offset += 1), 4 /*rand*/ + 4 /*lenname*/ + 4 /*lenserv*/))
-			GS_ERR_CLEAN_J(ident, 1);
-
-		Rand    = gs_read_uint(Packet->data + Offset + 0);
-		LenName = gs_read_uint(Packet->data + Offset + 4);
-		LenServ = gs_read_uint(Packet->data + Offset + 8);
-
-		if (gs_packet_space(Packet, (Offset += 12), LenName + LenServ))
-			GS_ERR_CLEAN_J(ident, 1);
-
-		if (!(NameBuf = (uint8_t *)malloc(LenName)))
-			GS_ERR_CLEAN_J(ident, 1);
-
-		if (!(ServBuf = (uint8_t *)malloc(LenServ)))
-			GS_ERR_CLEAN_J(ident, 1);
-
-		memcpy(NameBuf, Packet->data + Offset, LenName);
-		memcpy(ServBuf, Packet->data + Offset + LenName, LenServ);
-
-		if (!!(r = gs_vserv_user_create(&UserN)))
-			GS_GOTO_CLEAN_J(ident);
-
-		UserN->mNameBuf = GS_ARGOWN(&NameBuf); UserN->mLenName = LenName;
-		UserN->mServBuf = GS_ARGOWN(&ServBuf); UserN->mLenServ = LenServ;
-		UserN->mId = User->mId;
-
-		// FIXME: state mutation
-		Ext->mUsers[*Addr] = sp<GsVServUser>(GS_ARGOWN(&UserN), gs_vserv_user_destroy);
-
-		/* (cmd)[1], (rand)[4], (id)[2] */
-
-		if (gs_packet_space(Packet, 0, 1 /*cmd*/ + 4 /*rand*/ + 2 /*id*/))
-			GS_GOTO_CLEAN_J(ident);
-
-		gs_write_byte(IdentAckBuf + 0, GS_VSERV_CMD_IDENT_ACK);
-		gs_write_uint(IdentAckBuf + 1, Rand);
-		gs_write_uint(IdentAckBuf + 5, User->mId);
-
-		if (!!(r = gs_vserv_enqueue_idvec(Respond, &PacketOut, &User->mId, 1, Ext->mUserIdAddr)))
-			GS_GOTO_CLEAN_J(ident);
-
-	clean_ident:
-		if (!!r)
-			GS_GOTO_CLEAN();
+		/* intention is to have already had a go at parsing this message
+		   in gs_vserv_crank_identify. therefore just passthrough. */
 	}
 	break;
 

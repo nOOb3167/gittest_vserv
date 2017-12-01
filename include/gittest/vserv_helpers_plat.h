@@ -49,5 +49,6 @@ struct gs_addr_less_t { bool operator()(const GsAddr &a, const GsAddr &b) const;
 
 size_t gs_addr_rawhash(struct GsAddr *Addr);
 size_t gs_addr_port(struct GsAddr *Addr);
+unsigned long long gs_addr_addr(struct GsAddr *Addr);
 
 #endif /* _VSERV_HELPERS_PLAY_H_ */

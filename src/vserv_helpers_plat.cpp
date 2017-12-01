@@ -478,3 +478,8 @@ size_t gs_addr_port(struct GsAddr *Addr)
 {
 	return Addr->mSinPort;
 }
+
+unsigned long long gs_addr_addr(struct GsAddr *Addr)
+{
+	return Addr->mSinAddr;
+}
