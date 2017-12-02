@@ -13,12 +13,7 @@
 #include <gittest/vserv_playback.h>
 #include <gittest/vserv_clnt.h>
 
-struct GsName
-{
-	std::string mName;
-	std::string mServ;
-	uint16_t mId;
-};
+#define GS_CLNT_ARBITRARY_IDENT_RESEND_TIMEOUT 100
 
 struct GsRenamer
 {
@@ -63,7 +58,7 @@ int gs_renamer_ident_emit(struct GsRenamer *Renamer, struct GsPacket *ioPacket)
 	if (gs_packet_space(ioPacket, 0, 1 /*cmd*/ + 4 /*rand*/ + 4 /*lenname*/ + 4 /*lenserv*/ + Renamer->mNameWant.size() /*name*/ + Renamer->mServWant.size() /*serv*/))
 		GS_ERR_CLEAN(1);
 
-	gs_write_byte(ioPacket->data + 0, GS_VSERV_CMD_IDENT_FIXME);
+	gs_write_byte(ioPacket->data + 0, GS_VSERV_CMD_IDENT);
 	gs_write_uint(ioPacket->data + 1, Renamer->mRandLastRequested);
 	gs_write_uint(ioPacket->data + 5, Renamer->mNameWant.size());
 	gs_write_uint(ioPacket->data + 9, Renamer->mServWant.size());
@@ -128,14 +123,14 @@ int gs_vserv_clnt_crank0(
 
 	switch (Packet->data[0]) {
 
-	case GS_VSERV_CMD_IDENT_ACK_FIXME:
+	case GS_VSERV_CMD_IDENT_ACK:
 	{
 		/* (cmd)[1], (rand)[4], (id)[2] */
 
 		size_t Offset = 0;
 
 		uint32_t Rand = 0;
-		uint32_t Id = GS_VSERV_USER_ID_SERVFILL_FIXME;
+		uint32_t Id = GS_VSERV_USER_ID_SERVFILL;
 
 		if (gs_packet_space(Packet, (Offset += 1), 4 /*rand*/ + 2 /*id*/))
 			GS_ERR_CLEAN_J(ident_ack, 1);
@@ -169,7 +164,7 @@ int gs_vserv_clnt_crank0(
 	}
 	break;
 
-	case GS_VSERV_CMD_GROUP_MODE_MSG_FIXME:
+	case GS_VSERV_CMD_GROUP_MODE_MSG:
 	{
 		/* (cmd)[1], (mode)[1], (id)[2], (blk)[2], (seq)[2], (data)[...] */
 
@@ -192,7 +187,7 @@ int gs_vserv_clnt_crank0(
 
 		// FIXME: hmmm but SERVFILL_FIXME is actually a valid uint16_t value / id ?
 		//   prevent generating those (fix ex gs_vserv_user_genid)
-		GS_ASSERT(Id != GS_VSERV_USER_ID_SERVFILL_FIXME);
+		GS_ASSERT(Id != GS_VSERV_USER_ID_SERVFILL);
 
 		Offset += 7; /* rest is data */
 
@@ -241,7 +236,7 @@ int gs_vserv_clnt_callback_create(struct GsVServClnt *Clnt)
 	Ctx->mSeq = 0;
 	Ctx->mName.mName = std::string();
 	Ctx->mName.mServ = std::string();
-	Ctx->mName.mId = GS_VSERV_USER_ID_SERVFILL_FIXME;
+	Ctx->mName.mId = GS_VSERV_USER_ID_SERVFILL;
 	Ctx->mRecord = GS_ARGOWN(&Record);
 	Ctx->mPlayBack = GS_ARGOWN(&PlayBack);
 
@@ -332,7 +327,7 @@ int gs_vserv_clnt_callback_update_record(
 		GS_GOTO_CLEAN();
 
 	/* no mode - no send requested */
-	if (Mode == GS_VSERV_GROUP_MODE_NONE_FIXME)
+	if (Mode == GS_VSERV_GROUP_MODE_NONE)
 		GS_ERR_NO_CLEAN(0);
 
 	/* fresh blk? use it (also resetting seq) */
@@ -344,7 +339,7 @@ int gs_vserv_clnt_callback_update_record(
 	if (gs_packet_space(&PacketOut, 0, 1 /*cmd*/ + 1 /*mode*/ + 2 /*id*/ + 2 /*blk*/ + 2 /*seq*/ + LenFra /*data*/))
 		GS_ERR_CLEAN(1);
 
-	gs_write_byte(PacketOut.data + 0, GS_VSERV_CMD_GROUP_MODE_MSG_FIXME);
+	gs_write_byte(PacketOut.data + 0, GS_VSERV_CMD_GROUP_MODE_MSG);
 	gs_write_byte(PacketOut.data + 1, Mode);
 	gs_write_short(PacketOut.data + 2, Id);
 	gs_write_short(PacketOut.data + 4, Ctx->mBlk);

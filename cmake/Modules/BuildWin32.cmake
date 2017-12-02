@@ -19,6 +19,7 @@ SET(GITTEST_PLAT_SOURCES_NIX
 
 SET(GITTEST_VSERV_CLNT_TEST_HEADERS
   include/gittest/vserv_clnt.h
+  include/gittest/vserv_clnt_helpers.h
   include/gittest/vserv_helpers.h
   include/gittest/vserv_net.h
   include/gittest/vserv_playback.h

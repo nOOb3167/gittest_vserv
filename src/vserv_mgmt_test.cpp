@@ -1,5 +1,6 @@
 #include <cstdlib>
 #include <cstddef>
+#include <cstdint>
 
 #include <memory>
 #include <thread>
@@ -12,13 +13,19 @@
 #include <gittest/config.h>
 #include <gittest/log.h>
 #include <gittest/vserv_net.h>
+#include <gittest/vserv_clnt_helpers.h>
 
-#define GS_VSERV_CMD_NAMES_FIXME 'N'
-#define GS_VSERV_M_CMD_GROUPSET_FIXME 's'
-
-#define GS_MGMT_ARBITRARY_PACKET_MAX 4096 /* but mind IP layer fragmentation issues of UDP */
 #define GS_MGMT_ARBITRARY_EVT_MAX 64 /* how many dequeued at most per-iteration */
 #define GS_MGMT_ONE_TICK_MS 20
+
+#define GS_IDENTER_REQUEST_INTERVAL_MS 500
+
+struct GsIdenter
+{
+	std::vector<GsName> mName;
+	uint32_t mGenerationHave;
+	long long mTimeStampLastRequested;
+};
 
 struct GsVServClntMgmt
 {
@@ -33,6 +40,22 @@ struct GsVServClntMgmt
 };
 
 static int gs_vserv_enet_init();
+static int gs_identer_create(struct GsIdenter **oIdenter);
+static int gs_identer_destroy(struct GsIdenter *Identer);
+static bool gs_identer_is_wanted(struct GsIdenter *Identer);
+static int gs_identer_idget_emit(struct GsIdenter *Identer, struct GsPacket *ioPacket);
+static int gs_identer_update(struct GsIdenter *Identer, struct GsVServClntMgmt *Mgmt, long long TimeStamp);
+static int gs_vserv_enet_send_reliable(ENetPeer *Peer, const uint8_t *DataBuf, size_t LenData);
+static int gs_vserv_clnt_mgmt_send(struct GsVServClntMgmt *Mgmt, const uint8_t *DataBuf, size_t LenData);
+static int gs_vserv_mgmt_crank0(
+	struct GsVServClntMgmt *Mgmt,
+	long long TimeStamp,
+	struct GsPacket *Packet);
+static int gs_vserv_mgmt_update(
+	struct GsVServClntMgmt *Mgmt,
+	long long TimeStamp,
+	bool WaitIndicatesEventArrived,
+	ENetEvent *Evt /*owned*/);
 
 GsLogList *g_gs_log_list_global = gs_log_list_global_create();
 
@@ -41,13 +64,93 @@ int gs_vserv_enet_init()
 	return !! enet_initialize();
 }
 
-int gs_vserv_enet_send_reliable(ENetPeer *Peer, struct GsPacket *Packet)
+int gs_identer_create(struct GsIdenter **oIdenter)
+{
+	int r = 0;
+
+	struct GsIdenter *Identer = NULL;
+
+	Identer = new GsIdenter();
+	Identer->mName; /*dummy*/
+	Identer->mGenerationHave = 0; // FIXME: GENERATION_INVALID ?
+	Identer->mTimeStampLastRequested = 0;
+
+clean:
+
+	return r;
+}
+
+int gs_identer_destroy(struct GsIdenter *Identer)
+{
+	GS_DELETE(&Identer, struct GsIdenter);
+	return 0;
+}
+
+bool gs_identer_is_wanted(struct GsIdenter *Identer)
+{
+	return true;
+}
+
+int gs_identer_idget_emit(struct GsIdenter *Identer, struct GsPacket *ioPacket)
+{
+	int r = 0;
+
+	if (gs_packet_space(ioPacket, 0, 1 /*cmd*/ + 4 /*generation*/))
+		GS_ERR_CLEAN(1);
+
+	gs_write_byte(ioPacket->data + 0, GS_VSERV_CMD_IDGET);
+	gs_write_uint(ioPacket->data + 1, Identer->mGenerationHave);
+
+	/* update packet with final length */
+
+	ioPacket->dataLength = 5;
+
+clean:
+
+	return r;
+}
+
+int gs_identer_update(struct GsIdenter *Identer, struct GsVServClntMgmt *Mgmt, long long TimeStamp)
+{
+	int r = 0;
+
+	GS_ALLOCA_VAR(OutBuf, uint8_t, GS_CLNT_ARBITRARY_PACKET_MAX);
+	struct GsPacket Packet = { OutBuf, GS_CLNT_ARBITRARY_PACKET_MAX };
+
+	/* no update work needed at all */
+
+	if (! gs_identer_is_wanted(Identer))
+		GS_ERR_NO_CLEAN(0);
+
+	/* update work needed - but not yet */
+
+	if (TimeStamp < Identer->mTimeStampLastRequested + GS_IDENTER_REQUEST_INTERVAL_MS)
+		GS_ERR_NO_CLEAN(0);
+
+	/* update work - send / resent the ident message */
+
+	if (!!(r = gs_identer_idget_emit(Identer, &Packet)))
+		GS_GOTO_CLEAN();
+
+	if (!!(r = gs_vserv_clnt_mgmt_send(Mgmt, Packet.data, Packet.dataLength)))
+		GS_GOTO_CLEAN();
+
+	Identer->mTimeStampLastRequested = TimeStamp;
+
+noclean:
+
+clean:
+
+	return r;
+}
+
+int gs_vserv_enet_send_reliable(ENetPeer *Peer, const uint8_t *DataBuf, size_t LenData)
 {
 	int r = 0;
 
 	ENetPacket *Pkt = NULL;
 
-	if (!(Pkt = enet_packet_create(Packet->data, Packet->dataLength, ENET_PACKET_FLAG_RELIABLE)))
+	if (!(Pkt = enet_packet_create(DataBuf, LenData, ENET_PACKET_FLAG_RELIABLE)))
 		GS_ERR_CLEAN(1);
 
 	/* FIXME: according to the ENet Tutorial:
@@ -84,6 +187,11 @@ clean:
 	return r;
 }
 
+int gs_vserv_clnt_mgmt_send(struct GsVServClntMgmt *Mgmt, const uint8_t *DataBuf, size_t LenData)
+{
+	return gs_vserv_enet_send_reliable(Mgmt->mPeer, DataBuf, LenData);
+}
+
 int gs_vserv_mgmt_crank0(
 	struct GsVServClntMgmt *Mgmt,
 	long long TimeStamp,
@@ -99,7 +207,7 @@ int gs_vserv_mgmt_crank0(
 	switch (Packet->data[0])
 	{
 
-	case GS_VSERV_CMD_NAMES_FIXME:
+	case GS_VSERV_CMD_NAMES:
 	{
 		/* (cmd)[1], ((id)[2], (namenum)[4] (namevec)[namenum])[..] */
 
@@ -109,8 +217,8 @@ int gs_vserv_mgmt_crank0(
 		std::vector<std::string> Names;
 
 		struct GsPacket PacketOut = {};
-		GS_ALLOCA_ASSIGN(PacketOut.data, uint8_t, GS_MGMT_ARBITRARY_PACKET_MAX);
-		PacketOut.dataLength = GS_MGMT_ARBITRARY_PACKET_MAX;
+		GS_ALLOCA_ASSIGN(PacketOut.data, uint8_t, GS_CLNT_ARBITRARY_PACKET_MAX);
+		PacketOut.dataLength = GS_CLNT_ARBITRARY_PACKET_MAX;
 
 		size_t OffsetOut = 0;
 
@@ -132,7 +240,7 @@ int gs_vserv_mgmt_crank0(
 		if (gs_packet_space(&PacketOut, (OffsetOut), 1 /*cmd*/ + 4 /*idnum*/ + 4 /*sznum*/ + 2 * Ids.size() /*idvec*/ + 2 /*szvec*/))
 			GS_ERR_CLEAN_J(names, 1);
 
-		gs_write_byte(PacketOut.data + 0, GS_VSERV_M_CMD_GROUPSET_FIXME);
+		gs_write_byte(PacketOut.data + 0, GS_VSERV_M_CMD_GROUPSET);
 		gs_write_uint(PacketOut.data + 1, Ids.size());
 		gs_write_uint(PacketOut.data + 5, 1);
 
@@ -151,7 +259,7 @@ int gs_vserv_mgmt_crank0(
 
 		/* respond */
 
-		if (!!(r = gs_vserv_enet_send_reliable(Mgmt->mPeer, &PacketOut)))
+		if (!!(r = gs_vserv_enet_send_reliable(Mgmt->mPeer, PacketOut.data, PacketOut.dataLength)))
 			GS_GOTO_CLEAN();
 
 	clean_names:

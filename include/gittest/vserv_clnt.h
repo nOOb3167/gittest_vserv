@@ -5,16 +5,7 @@
 #include <stdint.h>
 
 #include <gittest/UDPSocket.hpp>
-
-// FIXME:
-#define GS_VSERV_CMD_IDENT_FIXME 'i'
-#define GS_VSERV_CMD_IDENT_ACK_FIXME 'I'
-#define GS_VSERV_CMD_GROUP_MODE_MSG_FIXME 'm'
-#define GS_VSERV_GROUP_MODE_NONE_FIXME 0
-#define GS_VSERV_USER_ID_SERVFILL_FIXME 0xFFFF
-
-#define GS_CLNT_ARBITRARY_PACKET_MAX 4096 /* but mind IP layer fragmentation issues of UDP */
-#define GS_CLNT_ARBITRARY_IDENT_RESEND_TIMEOUT 100
+#include <gittest/vserv_clnt_helpers.h>
 
 struct GsVServClnt;
 struct GsVServClntCtx;
