@@ -310,9 +310,9 @@ int gs_vserv_mgmt_crank0(
 		if (gs_packet_space(&PacketOut, (OffsetOut), 1 /*cmd*/ + 4 /*idnum*/ + 4 /*sznum*/))
 			GS_ERR_CLEAN_J(ids, 1);
 
-		gs_write_byte(PacketOut.data + Offset + 0, GS_VSERV_M_CMD_GROUPSET);
-		gs_write_uint(PacketOut.data + Offset + 1, Mgmt->mIdenter->mIdNameMap.size());
-		gs_write_uint(PacketOut.data + Offset + 5, 1);
+		gs_write_byte(PacketOut.data + OffsetOut + 0, GS_VSERV_M_CMD_GROUPSET);
+		gs_write_uint(PacketOut.data + OffsetOut + 1, Mgmt->mIdenter->mIdNameMap.size());
+		gs_write_uint(PacketOut.data + OffsetOut + 5, 1);
 
 		OffsetOut += 9;
 
