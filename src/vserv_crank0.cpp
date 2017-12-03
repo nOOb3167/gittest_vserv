@@ -749,7 +749,7 @@ int gs_vserv_crankm0(struct GsVServCtl *ServCtl, struct GsPacket *Packet, struct
 			if (gs_packet_space(&PacketOut, (OffsetOut), 2 /*id*/))
 				GS_ERR_CLEAN_J(idget, 1);
 			gs_write_short(PacketOut.data + OffsetOut, IdVec[i]);
-			Offset += 2;
+			OffsetOut += 2;
 		}
 
 		/* adjust packet to real length (vs maximum allowed) */
