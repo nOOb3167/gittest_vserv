@@ -125,9 +125,11 @@ int gs_vserv_mgmt_create(
 	if (!!(r = gs_buf_ensure_haszero(CommonVars->VServHostNameBuf, CommonVars->LenVServHostName + 1)))
 		GS_GOTO_CLEAN();
 
-	if (!!(r = enet_address_set_host(&Addr, CommonVars->VServHostNameBuf)))
-		GS_GOTO_CLEAN();
 	Addr.port = CommonVars->VServPortEnet;
+	Addr.host = ENET_HOST_ANY;
+	// FIXME: VServHostNameBuf resolves as localhost IPv6 - binding to the wrong address
+	//if (!!(r = enet_address_set_host(&Addr, CommonVars->VServHostNameBuf)))
+	//	GS_GOTO_CLEAN();
 
 	if (!(Host = enet_host_create(&Addr, GS_VSERV_ENET_ARBITRARY_CLIENT_MAX, 1, 0, 0)))
 		GS_ERR_CLEAN(1);
