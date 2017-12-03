@@ -80,7 +80,11 @@ int gs_identer_create(struct GsIdenter **oIdenter)
 	Identer->mGenerationHave = 0; // FIXME: GENERATION_INVALID ?
 	Identer->mTimeStampLastRequested = 0;
 
+	if (oIdenter)
+		*oIdenter = GS_ARGOWN(&Identer);
+
 clean:
+	GS_DELETE_F(&Identer, gs_identer_destroy);
 
 	return r;
 }
@@ -460,6 +464,8 @@ void threadfunc(struct GsVServClntMgmt *Mgmt)
 {
 	int r = 0;
 
+	log_guard_t Log(GS_LOG_GET("mgmt"));
+
 	typedef std::chrono::high_resolution_clock Clock;
 
 	long long TimeStampLastRun = std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now().time_since_epoch()).count();
@@ -501,6 +507,7 @@ int stuff(struct GsAuxConfigCommonVars *CommonVars)
 	ENetAddress Addr = {};
 	ENetHost *Host = NULL;
 	ENetPeer *Peer = NULL;
+	ENetEvent Evt = {};
 
 	if (!!(r = gs_vserv_enet_init()))
 		GS_GOTO_CLEAN();
@@ -513,6 +520,11 @@ int stuff(struct GsAuxConfigCommonVars *CommonVars)
 		GS_ERR_CLEAN(1);
 
 	if (!(Peer = enet_host_connect(Host, &Addr, 1, 0)))
+		GS_ERR_CLEAN(1);
+
+	if (0 > enet_host_service(Host, &Evt, GS_CLNT_ARBITRARY_CONNECT_TIMEOUT_MS))
+		GS_ERR_CLEAN(1);
+	if (Evt.type != ENET_EVENT_TYPE_CONNECT)
 		GS_ERR_CLEAN(1);
 
 	Mgmt = new GsVServClntMgmt();
@@ -556,7 +568,7 @@ int main(int argc, char **argv)
 		GS_GOTO_CLEAN();
 
 	{
-		log_guard_t Log(GS_LOG_GET("selfup"));
+		log_guard_t Log(GS_LOG_GET("mgmt"));
 		if (!!(r = stuff(&CommonVars)))
 			GS_GOTO_CLEAN();
 	}

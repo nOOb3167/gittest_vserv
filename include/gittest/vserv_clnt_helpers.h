@@ -5,6 +5,8 @@
 
 #include <cstring>
 
+#define GS_CLNT_ARBITRARY_CONNECT_TIMEOUT_MS 5000
+
 #define GS_CLNT_ARBITRARY_PACKET_MAX 4096 /* but mind IP layer fragmentation issues of UDP */
 
 #define GS_VSERV_USER_ID_INVALID 0xFFFF
