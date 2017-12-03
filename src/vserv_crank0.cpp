@@ -754,7 +754,7 @@ int gs_vserv_crankm0(struct GsVServCtl *ServCtl, struct GsPacket *Packet, struct
 
 		/* adjust packet to real length (vs maximum allowed) */
 
-		PacketOut.dataLength = Offset;
+		PacketOut.dataLength = OffsetOut;
 
 		/* respond */
 
