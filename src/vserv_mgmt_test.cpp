@@ -6,6 +6,9 @@
 #include <thread>
 #include <chrono>
 #include <random>
+#include <vector>
+#include <set>
+#include <map>
 
 #include <enet/enet.h>
 
@@ -22,7 +25,7 @@
 
 struct GsIdenter
 {
-	std::vector<GsName> mName;
+	std::map<gs_vserv_user_id_t, GsName> mIdNameMap;
 	uint32_t mGenerationHave;
 	long long mTimeStampLastRequested;
 };
@@ -37,6 +40,8 @@ struct GsVServClntMgmt
 
 	std::mt19937                            mRandGen;
 	std::uniform_int_distribution<uint32_t> mRandDis;
+
+	struct GsIdenter *mIdenter;
 };
 
 static int gs_vserv_enet_init();
@@ -71,7 +76,7 @@ int gs_identer_create(struct GsIdenter **oIdenter)
 	struct GsIdenter *Identer = NULL;
 
 	Identer = new GsIdenter();
-	Identer->mName; /*dummy*/
+	Identer->mIdNameMap; /*dummy*/
 	Identer->mGenerationHave = 0; // FIXME: GENERATION_INVALID ?
 	Identer->mTimeStampLastRequested = 0;
 
@@ -144,6 +149,46 @@ clean:
 	return r;
 }
 
+int gs_identer_merge_idvec(struct GsIdenter *Identer, gs_vserv_user_id_t *IdVec, size_t IdNum, uint32_t Generation)
+{
+	int r = 0;
+
+	std::map<gs_vserv_user_id_t, GsName> IdNameMap;
+
+	if (Identer->mGenerationHave > Generation)
+		GS_ERR_CLEAN(1); /* ? should not happen */
+
+	/* new map includes everything from IdVec */
+
+	for (size_t i = 0; i < IdNum; i++) {
+		struct GsName Tmp = {};
+		Tmp.mName; /*dummy*/
+		Tmp.mServ; /*dummy*/
+		Tmp.mId = IdVec[i];
+		IdNameMap[IdVec[i]] = Tmp;
+	}
+
+	if (IdNameMap.size() != IdNum)
+		GS_ERR_CLEAN(1); /* uniqueness test */
+
+	/* new map also merges from existing */
+
+	for (auto it = Identer->mIdNameMap.begin(); it != Identer->mIdNameMap.end(); it++) {
+		auto it2 = IdNameMap.find(it->first);
+		if (it2 == IdNameMap.end())
+			continue;
+		it2->second.mName = it->second.mName;
+		it2->second.mServ = it->second.mServ;
+	}
+
+	Identer->mIdNameMap = std::move(IdNameMap);
+	Identer->mGenerationHave = Generation;
+
+clean:
+
+	return r;
+}
+
 int gs_vserv_enet_send_reliable(ENetPeer *Peer, const uint8_t *DataBuf, size_t LenData)
 {
 	int r = 0;
@@ -206,6 +251,95 @@ int gs_vserv_mgmt_crank0(
 
 	switch (Packet->data[0])
 	{
+
+	case GS_VSERV_CMD_IDS:
+	{
+		/* (cmd)[1], (generation)[4], (idnum)[4], (idvec)[2*idnum] */
+
+		size_t Offset = 0;
+
+		uint32_t Generation = 0;
+		uint32_t IdNum = 0;
+		gs_vserv_user_id_t *IdVec = NULL;
+
+		struct GsPacket PacketOut = {};
+		GS_ALLOCA_ASSIGN(PacketOut.data, uint8_t, GS_CLNT_ARBITRARY_PACKET_MAX);
+		PacketOut.dataLength = GS_CLNT_ARBITRARY_PACKET_MAX;
+
+		size_t OffsetOut = 0;
+
+		if (gs_packet_space(Packet, (Offset += 1), 4 /*generation*/ + 4 /*idnum*/))
+			GS_ERR_CLEAN_J(ids, 1);
+
+		Generation = gs_read_uint(Packet->data + Offset + 0);
+		IdNum = gs_read_uint(Packet->data + Offset + 4);
+
+		if (gs_packet_space(Packet, (Offset += 8), 2 * IdNum))
+			GS_ERR_CLEAN_J(ids, 1);
+
+		GS_ALLOCA_ASSIGN(IdVec, gs_vserv_user_id_t, IdNum);
+
+		for (size_t i = 0; i < IdNum; i++)
+			IdVec[i] = gs_read_uint(Packet->data + Offset + 2 * IdNum);
+
+		Offset += 2 * IdNum;
+
+		if (Offset != Packet->dataLength)
+			GS_ERR_CLEAN_J(ids, 1); /* short packet? */
+
+		/* reliability-codepath .. but ENet reliable packets should have sufficed */
+
+		if (! gs_identer_is_wanted(Mgmt->mIdenter))
+			GS_ERR_CLEAN_J(ids, 0);
+		if (Generation < Mgmt->mIdenter->mGenerationHave)
+			GS_ERR_CLEAN_J(ids, 0);
+
+		/* seems legit, apply */
+
+		if (!!(r = gs_identer_merge_idvec(Mgmt->mIdenter, IdVec, IdNum, Generation)))
+			GS_GOTO_CLEAN_J(ids);
+
+		/* reply with how the ids need to be grouped */
+
+		/* (cmd)[1], (idnum)[4], (sznum)[4], (idvec[idnum])[2*idnum], (szvec[sznum])(2*sznum) */
+
+		if (gs_packet_space(&PacketOut, (OffsetOut), 1 /*cmd*/ + 4 /*idnum*/ + 4 /*sznum*/))
+			GS_ERR_CLEAN_J(ids, 1);
+
+		gs_write_byte(PacketOut.data + Offset + 0, GS_VSERV_M_CMD_GROUPSET);
+		gs_write_uint(PacketOut.data + Offset + 1, Mgmt->mIdenter->mIdNameMap.size());
+		gs_write_uint(PacketOut.data + Offset + 5, 1);
+
+		OffsetOut += 9;
+
+		for (auto it = Mgmt->mIdenter->mIdNameMap.begin(); it != Mgmt->mIdenter->mIdNameMap.end(); ++it) {
+			if (gs_packet_space(&PacketOut, (OffsetOut), 2 /*idvec[x]*/))
+				GS_ERR_CLEAN_J(ids, 1);
+			gs_write_short(PacketOut.data + OffsetOut, it->first);
+			OffsetOut += 2;
+		}
+
+		if (gs_packet_space(&PacketOut, (OffsetOut), 2 /*szvec[x]*/))
+			GS_ERR_CLEAN_J(ids, 1);
+
+		gs_write_short(PacketOut.data + OffsetOut, Mgmt->mIdenter->mIdNameMap.size());
+
+		OffsetOut += 2;
+
+		/* adjust packet to real length (vs maximum allowed) */
+
+		PacketOut.dataLength = OffsetOut;
+
+		/* respond */
+
+		if (!!(r = gs_vserv_clnt_mgmt_send(Mgmt, PacketOut.data, PacketOut.dataLength)))
+			GS_GOTO_CLEAN();
+
+	clean_ids:
+		if (!!r)
+			GS_GOTO_CLEAN();
+	}
+	break;
 
 	case GS_VSERV_CMD_NAMES:
 	{
@@ -288,6 +422,11 @@ int gs_vserv_mgmt_update(
 	GS_ALLOCA_VAR(EvtVec, ENetEvent, GS_MGMT_ARBITRARY_EVT_MAX);
 	const size_t EvtSize = GS_MGMT_ARBITRARY_EVT_MAX;
 	size_t EvtNum = 0;
+
+	/* network receiving and general network processing */
+
+	if (!!(r = gs_identer_update(Mgmt->mIdenter, Mgmt, TimeStamp)))
+		GS_GOTO_CLEAN();
 
 	GS_ASSERT(EvtNum++ < EvtSize);
 	EvtVec[0] = *GS_ARGOWN(&Evt);
@@ -383,6 +522,10 @@ int stuff(struct GsAuxConfigCommonVars *CommonVars)
 	Mgmt->mThread; /*dummy*/
 	Mgmt->mRandGen = std::mt19937(RandDev());
 	Mgmt->mRandDis = std::uniform_int_distribution<uint32_t>();
+	Mgmt->mIdenter = NULL;
+
+	if (!!(r = gs_identer_create(&Mgmt->mIdenter)))
+		GS_GOTO_CLEAN();
 
 	Mgmt->mThread = sp<std::thread>(new std::thread(threadfunc, Mgmt));
 
