@@ -284,7 +284,7 @@ int gs_vserv_mgmt_crank0(
 		GS_ALLOCA_ASSIGN(IdVec, gs_vserv_user_id_t, IdNum);
 
 		for (size_t i = 0; i < IdNum; i++)
-			IdVec[i] = gs_read_uint(Packet->data + Offset + 2 * IdNum);
+			IdVec[i] = gs_read_short(Packet->data + Offset + 2 * i);
 
 		Offset += 2 * IdNum;
 
@@ -354,12 +354,6 @@ int gs_vserv_mgmt_crank0(
 		std::vector<uint16_t> Ids;
 		std::vector<std::string> Names;
 
-		struct GsPacket PacketOut = {};
-		GS_ALLOCA_ASSIGN(PacketOut.data, uint8_t, GS_CLNT_ARBITRARY_PACKET_MAX);
-		PacketOut.dataLength = GS_CLNT_ARBITRARY_PACKET_MAX;
-
-		size_t OffsetOut = 0;
-
 		while (Offset < Packet->dataLength) {
 			uint16_t Id = 0;
 			size_t NameNum = 0;
@@ -372,33 +366,6 @@ int gs_vserv_mgmt_crank0(
 			Ids.push_back(Id);
 			Names.push_back(std::string((const char *) (Packet->data + Offset), NameNum));
 		}
-
-		/* (cmd)[1], (idnum)[4], (sznum)[4], (idvec[idnum])[2*idnum], (szvec[sznum])(2*sznum) */
-
-		if (gs_packet_space(&PacketOut, (OffsetOut), 1 /*cmd*/ + 4 /*idnum*/ + 4 /*sznum*/ + 2 * Ids.size() /*idvec*/ + 2 /*szvec*/))
-			GS_ERR_CLEAN_J(names, 1);
-
-		gs_write_byte(PacketOut.data + 0, GS_VSERV_M_CMD_GROUPSET);
-		gs_write_uint(PacketOut.data + 1, Ids.size());
-		gs_write_uint(PacketOut.data + 5, 1);
-
-		OffsetOut += 9;
-		
-		for (size_t i = 0; i < Ids.size(); i++, (OffsetOut+=2))
-			gs_write_short(PacketOut.data + OffsetOut, Ids[i]);
-		
-		gs_write_short(PacketOut.data + OffsetOut, Ids.size());
-
-		OffsetOut += 2;
-
-		/* adjust packet to real length (vs maximum allowed) */
-
-		PacketOut.dataLength = OffsetOut;
-
-		/* respond */
-
-		if (!!(r = gs_vserv_enet_send_reliable(Mgmt->mPeer, PacketOut.data, PacketOut.dataLength)))
-			GS_GOTO_CLEAN();
 
 	clean_names:
 		if (!!r)
