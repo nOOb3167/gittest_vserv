@@ -248,10 +248,14 @@ int gs_vserv_mgmt_crank0(
 {
 	int r = 0;
 
+	GS_MACRO_VSERV_CMD_LIST_VAR(CmdNumName);
+
 	if (gs_packet_space(Packet, 0, 1))
 		GS_ERR_CLEAN(1);
 
-	GS_LOG(I, PF, "pkt [cmd=%c]", (int)Packet->data[0]);
+	for (size_t i = 0; i < CmdNumNameNum; i++)
+		if (Packet->data[0] == CmdNumName[i].mNum)
+			GS_LOG(I, PF, "pkt [cmd=[%s], len=%d]", CmdNumName[i].mStr, (int) Packet->dataLength);
 
 	switch (Packet->data[0])
 	{

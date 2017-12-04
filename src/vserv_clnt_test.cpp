@@ -100,6 +100,8 @@ void threadfunc(struct GsVServClnt *Clnt)
 {
 	int r = 0;
 
+	log_guard_t Log(GS_LOG_GET("selfup"));
+
 	typedef std::chrono::high_resolution_clock Clock;
 
 	long long TimeStampLastRun = std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now().time_since_epoch()).count();
