@@ -292,7 +292,8 @@ int gs_playback_harvest(
 	int r = 0;
 
 	for (size_t i = 0; i < VecNum; i++)
-		ioSlotsVec[i] = NULL;
+		for (size_t j = 0; j < PlayBack->mFlowBufsNum; j++)
+			ioSlotsVec[i][j] = NULL;
 
 	for (size_t i = 0; i < VecNum; i++) {
 		const size_t InCount = ioCountVec[i];
@@ -307,7 +308,7 @@ int gs_playback_harvest(
 			continue;
 		const uint16_t SeqCurrentTime = (TimeStamp - FlowPlayBackStartTime) / GS_OPUS_FRAME_DURATION_20MS;
 		GS_ASSERT(itFlow->second.mNextSeq <= SeqCurrentTime);
-		const size_t Count = GS_MIN(ioCountVec[i], SeqCurrentTime - itFlow->second.mNextSeq);
+		const size_t Count = GS_MIN(InCount, SeqCurrentTime - itFlow->second.mNextSeq);
 		for (size_t j = 0; j < Count; j++) {
 			// FIXME: too clever. note that std::map operator[k] will create empty/default entry for 'k' may one not yet exist
 			struct GsPlayBackBuf * PBBuf = itFlow->second.mMapBuf[itFlow->second.mNextSeq + j].get();
@@ -318,7 +319,7 @@ int gs_playback_harvest(
 				GS_ASSERT(0);
 			}
 			ioSlotsVec[i][j] = PBBuf;
-			ioCountVec[i] = j;
+			ioCountVec[i]++;
 		}
 		itFlow->second.mNextSeq += Count;
 	}
@@ -369,6 +370,9 @@ int gs_playback_harvest_and_enqueue(
 			alSourceQueueBuffers(PlayBack->mSourceVec[i], 1, &BufferForPlayBack);
 			GS_NOALERR();
 		}
+		/* sentinel-ize the transferred BufferStackVec entries */
+		for (size_t j = 0; j < CountVec[i]; j++)
+			PlayBack->mBufferStackVec[i][(PlayBack->mStackCntVec[i] - 1) - j] = GS_AL_BUFFER_INVALID;
 		PlayBack->mStackCntVec[i] -= CountVec[i];
 	}
 
