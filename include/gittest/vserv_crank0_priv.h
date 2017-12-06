@@ -30,6 +30,8 @@ struct GsVServUser
 	uint8_t *mNameBuf; size_t mLenName;
 	uint8_t *mServBuf; size_t mLenServ;
 	gs_vserv_user_id_t mId;
+
+	long long mTimeStampLastRecv;
 };
 
 struct GsVServConExt
@@ -37,6 +39,7 @@ struct GsVServConExt
 	struct GsVServCon base;
 	struct GsAuxConfigCommonVars mCommonVars; /*notowned*/
 	struct GsVServManageId *mManageId;
+	long long mTimeStampLastUserTimeoutCheck;
 	std::map<GsAddr, sp<GsVServUser>, gs_addr_less_t> mUsers;
 	std::map<gs_vserv_user_id_t, GsAddr> mUserIdAddr;
 	sp<GsVServGroupAll> mGroupAll;

@@ -9,6 +9,7 @@
 #include <gittest/misc.h>
 #include <gittest/vserv_net.h>
 #include <gittest/vserv_helpers.h>
+#include <gittest/vserv_pinger.h>
 #include <gittest/vserv_record.h>
 #include <gittest/vserv_playback.h>
 #include <gittest/vserv_clnt.h>
@@ -29,10 +30,17 @@ struct GsVServClntCtx
 	int16_t mSeq;
 
 	struct GsName mName;
+	struct GsPinger *mPinger;
 	struct GsRenamer mRenamer;
 	struct GsRecord   *mRecord;
 	struct GsPlayBack *mPlayBack;
 };
+
+static int gs_vserv_clnt_pinger_update(
+	struct GsVServClnt *Clnt,
+	struct GsVServClntCtx *Ctx,
+	long long TimeStamp,
+	uint8_t *DataBuf, size_t DataSize);
 
 static bool gs_renamer_is_wanted(struct GsRenamer *Renamer);
 static int gs_renamer_ident_emit(struct GsRenamer *Renamer, struct GsPacket *ioPacket);
@@ -42,6 +50,30 @@ static int gs_vserv_clnt_crank0(
 	struct GsVServClntCtx *Ctx,
 	long long TimeStamp,
 	struct GsPacket *Packet);
+
+int gs_vserv_clnt_pinger_update(
+	struct GsVServClnt *Clnt,
+	struct GsVServClntCtx *Ctx,
+	long long TimeStamp,
+	uint8_t *DataBuf, size_t DataSize)
+{
+	int r = 0;
+	struct GsPacket Packet = { DataBuf, DataSize }; /*notowned*/
+	int WantEmitPacket = 0;
+
+	if (!!(r = gs_pinger_emit_prepare_cond(Ctx->mPinger, TimeStamp, &Packet, &WantEmitPacket)))
+		GS_GOTO_CLEAN();
+	if (WantEmitPacket) {
+		if (!!(r = gs_vserv_clnt_send(Clnt, Packet.data, Packet.dataLength)))
+			GS_GOTO_CLEAN();
+		if (!!(r = gs_pinger_emit_success(Ctx->mPinger, TimeStamp)))
+			GS_GOTO_CLEAN();
+	}
+
+clean:
+
+	return r;
+}
 
 bool gs_renamer_is_wanted(struct GsRenamer *Renamer)
 {
@@ -226,8 +258,12 @@ int gs_vserv_clnt_callback_create(struct GsVServClnt *Clnt)
 
 	struct GsVServClntCtx *Ctx = NULL;
 
+	struct GsPinger   *Pinger = NULL;
 	struct GsRecord   *Record = NULL;
 	struct GsPlayBack *PlayBack = NULL;
+
+	if (!!(r = gs_pinger_create(&Pinger)))
+		GS_GOTO_CLEAN();
 
 	if (!!(r = gs_record_create(&Record)))
 		GS_GOTO_CLEAN();
@@ -241,6 +277,8 @@ int gs_vserv_clnt_callback_create(struct GsVServClnt *Clnt)
 	Ctx->mName.mName = std::string();
 	Ctx->mName.mServ = std::string();
 	Ctx->mName.mId = GS_VSERV_USER_ID_SERVFILL;
+	Ctx->mPinger = GS_ARGOWN(&Pinger);
+	Ctx->mRenamer; /*dummy*/
 	Ctx->mRecord = GS_ARGOWN(&Record);
 	Ctx->mPlayBack = GS_ARGOWN(&PlayBack);
 
@@ -409,6 +447,9 @@ int gs_vserv_clnt_callback_update_other(
 
 	/* network receiving and general network processing
 	     receives sound data (ex accumulates playback with gs_playback_packet_insert) */
+
+	if (!!(r = gs_vserv_clnt_pinger_update(Clnt, Ctx, TimeStamp, DataBuf, DataSize)))
+		GS_GOTO_CLEAN();
 
 	if (!!(r = gs_renamer_update(&Ctx->mRenamer, Clnt, TimeStamp)))
 		GS_GOTO_CLEAN();

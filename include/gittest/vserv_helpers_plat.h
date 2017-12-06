@@ -12,6 +12,8 @@ struct GsAddr
 	unsigned long long mSinAddr; /*host byte order*/
 };
 
+long long gs_vserv_timestamp();
+
 int gs_vserv_sockets_create(
 	const char *Port,
 	int *ioSockFdVec, size_t SockFdNum);

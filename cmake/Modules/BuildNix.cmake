@@ -24,6 +24,8 @@ SET(GITTEST_VSERV_CLNT_TEST_HEADERS
   include/gittest/vserv_clnt.h
   include/gittest/vserv_clnt_helpers.h
   include/gittest/vserv_helpers.h
+  include/gittest/vserv_net.h
+  include/gittest/vserv_pinger.h
   include/gittest/vserv_playback.h
   include/gittest/vserv_record.h
   include/gittest/UDPSocket.hpp
@@ -33,6 +35,7 @@ SET(GITTEST_VSERV_CLNT_TEST_SOURCES
   src/vserv_clnt.cpp
   src/vserv_clnt_test.cpp
   src/vserv_helpers.cpp
+  src/vserv_pinger.cpp
   src/vserv_playback.cpp
   src/vserv_record.cpp
   ${GITTEST_LIB_SOURCES}

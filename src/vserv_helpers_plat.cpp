@@ -5,6 +5,7 @@
 #include <functional>  // std::hash
 
 // FIXME: some day figure which of these are ACTUALLY needed
+#include <time.h>  // clock_gettime
 #include <unistd.h>
 #include <fcntl.h>
 #include <netdb.h>
@@ -130,6 +131,16 @@ clean:
 		GS_ASSERT(0);
 
 	return NULL;
+}
+
+long long gs_vserv_timestamp()
+{
+	struct timespec TSpec = {};
+
+	if (!! clock_gettime(CLOCK_MONOTONIC, &TSpec))
+		GS_ASSERT(0);
+
+	return (TSpec.tv_sec * 1000) + (TSpec.tv_nsec / (1000 * 1000));
 }
 
 int gs_vserv_sockets_create(

@@ -7,6 +7,9 @@
 
 #define GS_CLNT_ARBITRARY_CONNECT_TIMEOUT_MS 5000
 
+#define GS_CLNT_ARBITRARY_USER_TIMEOUT_CHECK_MS 1000  /* check every 1s */
+#define GS_CLNT_ARBITRARY_USER_TIMEOUT_MS       5000  /* timing out users showing no network activity for 5s */
+
 #define GS_CLNT_ARBITRARY_PACKET_MAX 4096 /* but mind IP layer fragmentation issues of UDP */
 
 #define GS_VSERV_USER_ID_INVALID 0xFFFF
@@ -25,6 +28,7 @@ enum GsVServCmd {
 	GS_VSERV_CMD_NAMES = 'N',
 	GS_VSERV_CMD_IDGET = 'd',
 	GS_VSERV_CMD_IDS   = 'D',
+	GS_VSERV_CMD_PING  = 'p',
 };
 
 #define GS_MACRO_VSERV_CMD_ONE(NAME) { NAME, # NAME }
@@ -38,6 +42,7 @@ enum GsVServCmd {
 		GS_MACRO_VSERV_CMD_ONE(GS_VSERV_CMD_NAMES), \
 		GS_MACRO_VSERV_CMD_ONE(GS_VSERV_CMD_IDGET), \
 		GS_MACRO_VSERV_CMD_ONE(GS_VSERV_CMD_IDS), \
+		GS_MACRO_VSERV_CMD_ONE(GS_VSERV_CMD_PING), \
 	}
 #define GS_MACRO_VSERV_CMD_LIST_VAR(VARNAME) \
 	struct { int mNum; const char *mStr; } VARNAME[] = GS_MACRO_VSERV_CMD_LIST(); \

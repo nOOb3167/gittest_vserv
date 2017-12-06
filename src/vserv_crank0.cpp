@@ -14,6 +14,8 @@
 #include <gittest/vserv_mgmt_priv.h>
 #include <gittest/vserv_crank0_priv.h>
 
+int g_vserv_crank0_timeout_check_disable = 0;
+
 int gs_vserv_manage_id_create(struct GsVServManageId **oManageId)
 {
 	int r = 0;
@@ -183,6 +185,7 @@ int gs_vserv_user_create(struct GsVServUser **oUser)
 	User->mNameBuf = NULL; User->mLenName = 0;
 	User->mServBuf = NULL; User->mLenServ = 0;
 	User->mId = GS_VSERV_USER_ID_INVALID;
+	User->mTimeStampLastRecv = 0;
 
 	if (oUser)
 		*oUser = GS_ARGOWN(&User);
@@ -226,6 +229,7 @@ int gs_vserv_con_ext_create(
 	Ext = new GsVServConExt();
 	Ext->mCommonVars = *CommonVars;
 	Ext->mManageId = GS_ARGOWN(&ManageId);
+	Ext->mTimeStampLastUserTimeoutCheck = 0;
 	Ext->mUsers;      /*dummy*/
 	Ext->mUserIdAddr; /*dummy*/
 	Ext->mGroupAll = sp<GsVServGroupAll>(GS_ARGOWN(&GroupAll), gs_vserv_groupall_destroy);
@@ -426,6 +430,67 @@ clean:
 	return r;
 }
 
+int gs_vserv_crank_timeout_recv(
+	struct GsVServConExt *Ext,
+	struct GsAddr *Addr,
+	struct GsVServUser *UserRecv,
+	long long TimeStamp,
+	int *oHaveAnyTimeout)
+{
+	int r = 0;
+
+	int HaveAnyTimeout = 0;
+
+	UserRecv->mTimeStampLastRecv = TimeStamp;
+
+	if (g_vserv_crank0_timeout_check_disable)
+		GS_ERR_NO_CLEAN(0);
+
+	if (TimeStamp < Ext->mTimeStampLastUserTimeoutCheck + GS_CLNT_ARBITRARY_USER_TIMEOUT_CHECK_MS)
+		GS_ERR_NO_CLEAN(0);
+
+	for (auto it = Ext->mUsers.begin(); it != Ext->mUsers.end(); ++it) {
+		if (TimeStamp < it->second->mTimeStampLastRecv + GS_CLNT_ARBITRARY_USER_TIMEOUT_MS)
+			continue;
+		/* timed out */
+		/* UserRecv couldn't have timed out - supposedly we've just refreshed its timestamp */
+		GS_ASSERT(it->second->mId != UserRecv->mId);
+		HaveAnyTimeout = 1;
+		break;
+	}
+
+noclean:
+	if (oHaveAnyTimeout)
+		*oHaveAnyTimeout = HaveAnyTimeout;
+
+clean:
+
+	return r;
+}
+
+int gs_vserv_crank_timeout_disconnect(
+	struct GsVServConExt *Ext,
+	long long TimeStamp)
+{
+	int r = 0;
+
+	for (auto it = Ext->mUsers.begin(); it != Ext->mUsers.end(); /*dummy*/) {
+		if (TimeStamp < it->second->mTimeStampLastRecv + GS_CLNT_ARBITRARY_USER_TIMEOUT_MS) {
+			++it;
+		}
+		else {
+			/* timed out */
+			Ext->mUserIdAddr.erase(it->second->mId);
+			it = Ext->mUsers.erase(it);
+			break;
+		}
+	}
+
+clean:
+
+	return r;
+}
+
 int gs_vserv_crank0(struct GsVServCtl *ServCtl, struct GsPacket *Packet, struct GsAddr *Addr, struct GsVServRespond *Respond)
 {
 	int r = 0;
@@ -436,10 +501,18 @@ int gs_vserv_crank0(struct GsVServCtl *ServCtl, struct GsPacket *Packet, struct 
 
 	sp<GsVServUser> User;
 
+	long long TimeStamp = 0;
+	int HaveAnyTimeout = 0;
+
 	if (!!(r = gs_vserv_lock_lock(Ext->mLock)))
 		GS_GOTO_CLEAN();
 
+	TimeStamp = gs_vserv_timestamp();
+
 	if (!!(r = gs_vserv_crank_identify(Ext, Packet, Addr, Respond, &User)))
+		GS_GOTO_CLEAN();
+
+	if (!!(r = gs_vserv_crank_timeout_recv(Ext, Addr, User.get(), TimeStamp, &HaveAnyTimeout)))
 		GS_GOTO_CLEAN();
 
 	if (gs_packet_space(Packet, 0, 1))
@@ -620,9 +693,30 @@ int gs_vserv_crank0(struct GsVServCtl *ServCtl, struct GsPacket *Packet, struct 
 	}
 	break;
 
+	case GS_VSERV_CMD_PING:
+	{
+		/* (cmd)[1] */
+
+		size_t Offset = 0;
+
+		if (gs_packet_space(Packet, (Offset += 1), 0))
+			GS_ERR_CLEAN_J(ping, 1);
+
+	clean_ping:
+		if (!!r)
+			GS_GOTO_CLEAN();
+	}
+	break;
+
 	default:
 		GS_ASSERT(0);
 
+	}
+
+noclean:
+	if (HaveAnyTimeout) {
+		if (!!(r = gs_vserv_crank_timeout_disconnect(Ext, TimeStamp)))
+			GS_GOTO_CLEAN();
 	}
 
 clean:
