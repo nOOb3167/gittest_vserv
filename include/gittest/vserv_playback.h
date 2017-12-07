@@ -3,6 +3,7 @@
 
 #define GS_PLAYBACK_FLOW_DELAY_EXPIRY_MS (GS_OPUS_FRAME_DURATION_20MS * 3) /* three opus frames */
 #define GS_PLAYBACK_FLOW_DELAY_MS 50
+#define GS_PLAYBACK_FLOW_LEADING_SEQUENCE_LOSS_THRESHOLD (50 * 3) /* at 20ms there are 50 frames per second. (50*3) designating 3s of continued loss */
 /* https://www.reddit.com/r/Planetside/comments/1e9z36/two_ini_lines_that_gave_me_a_massive_boost_to_fps/
      have not profiled CPU use yet but logically having many simultaneous 'voice' / audio flows must impact performance */
 #define GS_PLAYBACK_FLOWS_NUM 4

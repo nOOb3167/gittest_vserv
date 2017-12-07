@@ -217,11 +217,32 @@ int gs_playback_packet_insert(
 		auto it1 = PlayBack->mMapFlow.find(Key);
 
 		if (it1 == PlayBack->mMapFlow.end()) {
-			struct GsPlayBackFlow PBFlow;
-			PBFlow.mMapBuf; /*dummy*/
-			PBFlow.mTimeStampFirstReceipt = TimeStamp;
-			PBFlow.mNextSeq = 0;
-			it1 = (PlayBack->mMapFlow.insert(std::make_pair(Key, std::move(PBFlow)))).first;
+			/* this is the first packet seen from this flow */
+			if (Seq > GS_PLAYBACK_FLOW_LEADING_SEQUENCE_LOSS_THRESHOLD) {
+				/* if such a first packet arrives with a high Seq number
+				   we can assume the earlier Seq got lost, somehow otherwise will not be arriving,
+				   or at the very least be severely outdated the moment they would of been received.
+				   ATM the known non-failure path known to cause such high Seq number is
+				   a client connecting to the voice server during an ongoing long-running
+				   flow. The client, having just connected, is guaranteed to miss the
+				   earlier Seq. First packet received of the long-running flow will have high Seq.
+				   Two ways of handling such high Seq scenarios were considered:
+				     - play the flow as usual (low Seq considered packet-loss)
+					   leads to a severe time lag between recording and eventual playback of the affected flow.
+					 - drop the flow
+					   ''cant have time lag if you aint ever playing the flow :>''
+					   potentially discards perfectly usable data (rest of the long-running flow)
+					Current handling implemented as drop the flow.
+				   */
+				GS_ERR_NO_CLEAN(0);
+			}
+			else {
+				struct GsPlayBackFlow PBFlow;
+				PBFlow.mMapBuf; /*dummy*/
+				PBFlow.mTimeStampFirstReceipt = TimeStamp;
+				PBFlow.mNextSeq = 0;
+				it1 = (PlayBack->mMapFlow.insert(std::make_pair(Key, std::move(PBFlow)))).first;
+			}
 		}
 
 		auto it2 = it1->second.mMapBuf.find(Seq);
