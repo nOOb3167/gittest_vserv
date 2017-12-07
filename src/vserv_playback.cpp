@@ -20,6 +20,10 @@
 
 #define GS_AL_BUFFER_INVALID 0xFFFFFFFF
 
+// FIXME: temp global data
+uint8_t BufSilenceDummy[2 * (GS_48KHZ / 1000 * GS_OPUS_FRAME_DURATION_20MS)] = {};
+struct GsPlayBackBuf PBBufSilenceDummy = { BufSilenceDummy, 2 * (GS_48KHZ / 1000 * GS_OPUS_FRAME_DURATION_20MS), 0, NULL };
+
 struct GsPlayBackFlowKey
 {
 	uint16_t mId;
@@ -311,12 +315,13 @@ int gs_playback_harvest(
 		const size_t Count = GS_MIN(InCount, SeqCurrentTime - itFlow->second.mNextSeq);
 		for (size_t j = 0; j < Count; j++) {
 			// FIXME: too clever. note that std::map operator[k] will create empty/default entry for 'k' may one not yet exist
-			struct GsPlayBackBuf * PBBuf = itFlow->second.mMapBuf[itFlow->second.mNextSeq + j].get();
+			const size_t ProcessingSeq = itFlow->second.mNextSeq + j;
+			struct GsPlayBackBuf * PBBuf = itFlow->second.mMapBuf[ProcessingSeq].get();
 			if (PBBuf == NULL) {
 				/* must have been lost / reordered or past end of flow */
-				// FIXME: produce a dummy buffer
+				// FIXME: produce a dummy GsPlayBackBuf instead of NULL ?
 				//   insert into mMapBuf (cant just output it from this function because output is notowned)
-				GS_ASSERT(0);
+				itFlow->second.mMapBuf[ProcessingSeq].reset((struct GsPlayBackBuf *) NULL, gs_playback_buf_destroy);
 			}
 			ioSlotsVec[i][j] = PBBuf;
 			ioCountVec[i]++;
@@ -364,6 +369,8 @@ int gs_playback_harvest_and_enqueue(
 		/* transfer CountVec[i] GsPlayBackBufs into OpenAL buffers and queue them */
 		for (size_t j = 0; j < CountVec[i]; j++) {
 			struct GsPlayBackBuf *PBBuf = SlotsPtrVec[i][j];
+			if (PBBuf == NULL)
+				PBBuf = &PBBufSilenceDummy;
 			ALuint BufferForPlayBack = PlayBack->mBufferStackVec[i][(PlayBack->mStackCntVec[i] - 1) - j];
 			alBufferData(BufferForPlayBack, AL_FORMAT_MONO16, PBBuf->mDataPtr + PBBuf->mDataOffset, PBBuf->mLenData, GS_48KHZ);
 			GS_NOALERR();
