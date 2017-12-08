@@ -59,8 +59,7 @@ static int gs_vserv_mgmt_crank0(
 static int gs_vserv_mgmt_update(
 	struct GsVServClntMgmt *Mgmt,
 	long long TimeStamp,
-	bool WaitIndicatesEventArrived,
-	ENetEvent *Evt /*owned*/);
+	ENetEvent *EvtVec, size_t EvtNum /*owned*/);
 
 GsLogList *g_gs_log_list_global = gs_log_list_global_create();
 
@@ -389,75 +388,109 @@ clean:
 int gs_vserv_mgmt_update(
 	struct GsVServClntMgmt *Mgmt,
 	long long TimeStamp,
-	bool WaitIndicatesEventArrived,
-	ENetEvent *Evt /*owned*/)
+	ENetEvent *EvtVec, size_t EvtNum /*owned*/)
 {
 	int r = 0;
-
-	GS_ALLOCA_VAR(EvtVec, ENetEvent, GS_MGMT_ARBITRARY_EVT_MAX);
-	const size_t EvtSize = GS_MGMT_ARBITRARY_EVT_MAX;
-	size_t EvtNum = 0;
 
 	/* network receiving and general network processing */
 
 	if (!!(r = gs_identer_update(Mgmt->mIdenter, Mgmt, TimeStamp)))
 		GS_GOTO_CLEAN();
 
-	GS_ASSERT(EvtNum++ < EvtSize);
-	EvtVec[0] = *GS_ARGOWN(&Evt);
-
-	for (/*dummy*/; EvtNum < EvtSize; EvtNum++) {
-		int NReady = 0;
-		if (0 > (NReady = enet_host_service(Mgmt->mHost, EvtVec + EvtNum, 0)))
-			GS_ERR_CLEAN(1);
-		if (! NReady)
-			break;
-	}
+	/* note releasing EvtVec is handled at the end */
 
 	for (size_t i = 0; i < EvtNum; i++) {
-		struct GsPacket Packet = {};
-		if (EvtVec[i].type != ENET_EVENT_TYPE_RECEIVE)
-			continue;
-		Packet.data = EvtVec[i].packet->data;
-		Packet.dataLength = EvtVec[i].packet->dataLength;
-		if (!!(r = gs_vserv_mgmt_crank0(Mgmt, TimeStamp, &Packet)))
-			GS_GOTO_CLEAN();
+		switch (EvtVec[i].type)
+		{
+
+		case ENET_EVENT_TYPE_CONNECT:
+		{
+			/* clnt_mgmt only maintains one connection, which should have already been established */
+			GS_ASSERT(0);
+		}
+		break;
+
+		case ENET_EVENT_TYPE_DISCONNECT:
+		{
+			/* no good way to handle this, currently? */
+			GS_ERR_CLEAN(1);
+		}
+		break;
+
+		case ENET_EVENT_TYPE_RECEIVE:
+		{
+			struct GsPacket Packet = {};
+			Packet.data = EvtVec[i].packet->data;
+			Packet.dataLength = EvtVec[i].packet->dataLength;
+			if (!!(r = gs_vserv_mgmt_crank0(Mgmt, TimeStamp, &Packet)))
+				GS_GOTO_CLEAN();
+		}
+		break;
+
+		default:
+			GS_ASSERT(0);
+
+		}
 	}
 
 clean:
-	if (WaitIndicatesEventArrived && Evt && Evt->type == ENET_EVENT_TYPE_RECEIVE && Evt->packet)
-		enet_packet_destroy(Evt->packet);
+	if (EvtVec)
+		for (size_t i = 0; i < EvtNum; i++)
+			if (EvtVec[i].type == ENET_EVENT_TYPE_RECEIVE && EvtVec[i].packet)
+				enet_packet_destroy(EvtVec[i].packet);
 
 	return r;
 }
 
 void threadfunc(struct GsVServClntMgmt *Mgmt)
 {
+#define GS_VSERV_MGMT_TEST__THREADFUNC_TIMESTAMP() std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now().time_since_epoch()).count()
+	typedef std::chrono::high_resolution_clock Clock;
+
 	int r = 0;
 
 	log_guard_t Log(GS_LOG_GET("mgmt"));
 
-	typedef std::chrono::high_resolution_clock Clock;
+	long long TimeStampLastRun = GS_VSERV_MGMT_TEST__THREADFUNC_TIMESTAMP();
+	long long TimeStampBeforeWait = 0;
 
-	long long TimeStampLastRun = std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now().time_since_epoch()).count();
+	GS_ALLOCA_VAR(EvtStorageVec, ENetEvent, GS_MGMT_ARBITRARY_EVT_MAX);
 
 	while (true) {
-		int NReady = 0;
-		ENetEvent Evt = {};
-		long long TimeStampBeforeWait = std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now().time_since_epoch()).count();
-		bool WaitIndicatesEventArrived = 0;
-		if (TimeStampBeforeWait < TimeStampLastRun) /* backwards clock? wtf? */
-			TimeStampBeforeWait = LLONG_MAX;        /* just ensure processing runs immediately */
+		ENetEvent   *EvtVec = EvtStorageVec;
+		const size_t EvtSize = GS_MGMT_ARBITRARY_EVT_MAX;
+		size_t       EvtNum = 0;
+
+		if ((TimeStampBeforeWait = GS_VSERV_MGMT_TEST__THREADFUNC_TIMESTAMP()) < TimeStampLastRun)
+			TimeStampBeforeWait = LLONG_MAX; /* backwards clock? wtf? just ensure processing runs immediately */
 		long long TimeRemainingToFullTick = GS_MGMT_ONE_TICK_MS - GS_MIN(TimeStampBeforeWait - TimeStampLastRun, GS_MGMT_ONE_TICK_MS);
-		/* enet does not have a readinesss notification API - instead check + deliver one */
-		if (0 > (NReady = enet_host_service(Mgmt->mHost, &Evt, TimeRemainingToFullTick)))
+		int NReady = 0;
+		/* enet does not have a readinesss notification API - instead check + deliver */
+		/* check for events - if any, deliver first event */
+		GS_ASSERT(EvtNum < EvtSize);
+		if (0 > (NReady = enet_host_service(Mgmt->mHost, EvtVec + EvtNum, TimeRemainingToFullTick)))
 			GS_ERR_CLEANSUB(1);
-		/* the way enet_host_service is used, do not error out until someone acquires ownership of the Evt ENetEvent */
-		WaitIndicatesEventArrived = (NReady > 0);
-		TimeStampLastRun = std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now().time_since_epoch()).count();
-		if (!!(r = gs_vserv_mgmt_update(Mgmt, TimeStampLastRun, WaitIndicatesEventArrived, &Evt)))
+		/* if an event was delivered, more may be incoming - deliver rest of the events */
+		if (NReady > 0) {
+			EvtNum++;
+			while (EvtNum < EvtSize) {
+				if (0 > (NReady = enet_host_check_events(Mgmt->mHost, EvtVec + EvtNum)))
+					GS_ERR_CLEANSUB(1);
+				if (NReady > 0)
+					EvtNum++;
+				else
+					break;
+			}
+		}
+		TimeStampLastRun = GS_VSERV_MGMT_TEST__THREADFUNC_TIMESTAMP();
+		if (!!(r = gs_vserv_mgmt_update(Mgmt, TimeStampLastRun, GS_ARGOWN(&EvtVec), EvtNum)))
 			GS_GOTO_CLEANSUB();
+
 	cleansub:
+		if (EvtVec)
+			for (size_t i = 0; i < EvtNum; i++)
+				if (EvtVec[i].type == ENET_EVENT_TYPE_RECEIVE && EvtVec[i].packet)
+					enet_packet_destroy(EvtVec[i].packet);
 		if (!!r)
 			GS_GOTO_CLEAN();
 	}
