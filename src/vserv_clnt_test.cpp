@@ -107,9 +107,11 @@ void threadfunc(struct GsVServClnt *Clnt)
 	long long TimeStampLastRun = std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now().time_since_epoch()).count();
 
 	// FIXME: temporary testing dummy
+	uint16_t BlkDummy = 0;
+	long long BlkTimeStampDummy = TimeStampLastRun;
+	// FIXME: temporary testing dummy
 	if (!!(r = gs_vserv_clnt_callback_ident(Clnt, "abcd", 4, "efgh", 4, TimeStampLastRun)))
 		GS_GOTO_CLEAN();
-	Clnt->mKeys.store('s');
 
 	while (true) {
 		uint32_t Keys = 0;
@@ -121,6 +123,9 @@ void threadfunc(struct GsVServClnt *Clnt)
 		WaitIndicatesDataArrived = Clnt->mSocket->WaitData(TimeRemainingToFullTick); /* note indication is not actually used */
 		TimeStampLastRun = std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now().time_since_epoch()).count();
 		Keys = Clnt->mKeys.load();
+		// FIXME: temporary testing dummy
+		BlkDummy = (TimeStampLastRun - BlkTimeStampDummy) / 3000; /* increment new block every 3s */
+		Keys = ('s' << 0) | (BlkDummy << 8);
 		if (!!(r = gs_vserv_clnt_callback_update_other(Clnt, TimeStampLastRun, Keys)))
 			GS_GOTO_CLEAN();
 	}
