@@ -335,15 +335,10 @@ int gs_playback_harvest(
 		GS_ASSERT(itFlow->second.mNextSeq <= SeqCurrentTime);
 		const size_t Count = GS_MIN(InCount, SeqCurrentTime - itFlow->second.mNextSeq);
 		for (size_t j = 0; j < Count; j++) {
-			// FIXME: too clever. note that std::map operator[k] will create empty/default entry for 'k' may one not yet exist
-			const size_t ProcessingSeq = itFlow->second.mNextSeq + j;
-			struct GsPlayBackBuf * PBBuf = itFlow->second.mMapBuf[ProcessingSeq].get();
-			if (PBBuf == NULL) {
-				/* must have been lost / reordered or past end of flow */
-				// FIXME: produce a dummy GsPlayBackBuf instead of NULL ?
-				//   insert into mMapBuf (cant just output it from this function because output is notowned)
-				itFlow->second.mMapBuf[ProcessingSeq].reset((struct GsPlayBackBuf *) NULL, gs_playback_buf_destroy);
-			}
+			struct GsPlayBackBuf * PBBuf = NULL;
+			auto itBuf = itFlow->second.mMapBuf.find(itFlow->second.mNextSeq + j);
+			if (itBuf != itFlow->second.mMapBuf.end())
+				PBBuf = itBuf->second.get();
 			ioSlotsVec[i][j] = PBBuf;
 			ioCountVec[i]++;
 		}
@@ -443,10 +438,26 @@ int gs_playback_affinity_process(struct GsPlayBack *PlayBack, long long TimeStam
 		int Alive = 0;
 		if (!!(r = gs_playback_affinity_flow_liveness(PlayBack, TimeStamp, &*it, &Alive)))
 			GS_GOTO_CLEAN();
-		if (Alive) /*keep*/
+		if (Alive) {
+			/*keep*/
 			++it;
-		else       /*drop*/
+		}
+		else {
+			/*drop*/
+			struct GsPlayBackFlowKey Key = { it->mId, it->mBlk };
+			auto itFlow = PlayBack->mMapFlow.find(Key);
+			auto itId = PlayBack->mMapId.find(it->mId);
+			GS_ASSERT(itFlow != PlayBack->mMapFlow.end());
+			GS_ASSERT(itId != PlayBack->mMapId.end());
+			PlayBack->mMapFlow.erase(Key);
+			// FIXME: the correct time for removal of mMapId[Id] is after disconnection of user Id,
+			//        and before Id gets recycled for a new connection.
+			//        ex even if all flows with keys mId=Id are gone from mMapFlow are gone
+			//          more such flows could arrive in the future. if mMapId[Id] were removed,
+			//          its former state would be lost.
+			//// PlayBack->mMapId.erase(it->mId);
 			it = PlayBack->mAffinity.erase(it);
+		}
 	}
 
 	/* fill for up to max flows */
@@ -495,8 +506,8 @@ int gs_playback_affinity_flow_liveness(
 		long long ExpiryComparisonStartTime = FlowPlayBackStartTime;
 		if (itLastReceived != itFlow->second.mMapBuf.rend()) {
 			const uint16_t  SeqLastReceived  = itLastReceived->first;
-			const long long LastReceivedTime = SeqLastReceived * GS_OPUS_FRAME_DURATION_20MS;
-			ExpiryComparisonStartTime = LastReceivedTime;
+			const long long SeqLastReceivedStartTimeOffset = SeqLastReceived * GS_OPUS_FRAME_DURATION_20MS;
+			ExpiryComparisonStartTime += SeqLastReceivedStartTimeOffset;
 		}
 		ExpiryComparisonStartTime += GS_PLAYBACK_FLOW_DELAY_EXPIRY_MS;
 		if (ExpiryComparisonStartTime < TimeStamp)
