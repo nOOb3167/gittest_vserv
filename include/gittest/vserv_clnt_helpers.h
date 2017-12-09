@@ -2,8 +2,9 @@
 #define _VSERV_CLNT_HELPERS_H_
 
 #include <stdint.h>
-
 #include <cstring>
+
+#include <string>
 
 #define GS_CLNT_ARBITRARY_CONNECT_TIMEOUT_MS 5000
 

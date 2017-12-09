@@ -16,8 +16,6 @@
 #include <gittest/log.h>
 #include <gittest/vserv_clnt.h>
 #include <gittest/vserv_helpers.h>
-#include <gittest/vserv_record.h>
-// FIXME: BLAH GetHostByName
 #include <gittest/UDPSocket.hpp>
 
 #define GS_CLNT_ONE_TICK_MS 20
@@ -27,6 +25,7 @@ struct GsVServClnt
 	struct GsVServClntCtx *mCtx;
 	sp<UDPSocket> mSocket;
 	sp<std::thread> mThread;
+	uint32_t mThreadExitCode;
 	struct GsVServClntAddress mAddr;
 	std::atomic<uint32_t> mKeys;
 	std::mt19937                            mRandGen;
@@ -131,8 +130,7 @@ void threadfunc(struct GsVServClnt *Clnt)
 	}
 
 clean:
-	if (!!r)
-		GS_ASSERT(0);
+	Clnt->mThreadExitCode = r;
 }
 
 int stuff(struct GsAuxConfigCommonVars *CommonVars)
@@ -175,6 +173,8 @@ int stuff(struct GsAuxConfigCommonVars *CommonVars)
 	Clnt = new GsVServClnt();
 	Clnt->mCtx = NULL;
 	Clnt->mSocket = sp<UDPSocket>(new UDPSocket());
+	Clnt->mThread; /*dummy*/
+	Clnt->mThreadExitCode = 0;
 	Clnt->mAddr = Addr;
 	Clnt->mKeys.store(0);
 	Clnt->mRandGen = std::mt19937(RandDev());
@@ -188,6 +188,9 @@ int stuff(struct GsAuxConfigCommonVars *CommonVars)
 	Clnt->mThread = sp<std::thread>(new std::thread(threadfunc, Clnt));
 
 	Clnt->mThread->join();
+
+	if (!!(r = Clnt->mThreadExitCode))
+		GS_GOTO_CLEAN();
 
 clean:
 

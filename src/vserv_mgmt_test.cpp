@@ -37,6 +37,7 @@ struct GsVServClntMgmt
 	ENetPeer *mPeer;
 
 	sp<std::thread> mThread;
+	uint32_t mThreadExitCode;
 
 	std::mt19937                            mRandGen;
 	std::uniform_int_distribution<uint32_t> mRandDis;
@@ -496,8 +497,7 @@ void threadfunc(struct GsVServClntMgmt *Mgmt)
 	}
 
 clean:
-	if (!!r)
-		GS_ASSERT(0);
+	Mgmt->mThreadExitCode = r;
 }
 
 int stuff(struct GsAuxConfigCommonVars *CommonVars)
@@ -536,6 +536,7 @@ int stuff(struct GsAuxConfigCommonVars *CommonVars)
 	Mgmt->mHost = GS_ARGOWN(&Host);
 	Mgmt->mPeer = GS_ARGOWN(&Peer);
 	Mgmt->mThread; /*dummy*/
+	Mgmt->mThreadExitCode = 0;
 	Mgmt->mRandGen = std::mt19937(RandDev());
 	Mgmt->mRandDis = std::uniform_int_distribution<uint32_t>();
 	Mgmt->mIdenter = NULL;
@@ -546,6 +547,9 @@ int stuff(struct GsAuxConfigCommonVars *CommonVars)
 	Mgmt->mThread = sp<std::thread>(new std::thread(threadfunc, Mgmt));
 
 	Mgmt->mThread->join();
+
+	if (!!(r = Mgmt->mThreadExitCode))
+		GS_GOTO_CLEAN();
 
 clean:
 
