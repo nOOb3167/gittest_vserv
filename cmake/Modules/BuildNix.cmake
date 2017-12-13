@@ -1,6 +1,7 @@
 # gittest_vserv
 
 SET(GITTEST_VSERV_HEADERS
+  include/gittest/systemd_helpers.h
   include/gittest/vserv_crank0_priv.h
   include/gittest/vserv_helpers.h
   include/gittest/vserv_helpers_plat.h
@@ -10,6 +11,7 @@ SET(GITTEST_VSERV_HEADERS
   ${GITTEST_LIB_HEADERS}
 )
 SET(GITTEST_VSERV_SOURCES
+  src/systemd_helpers.cpp
   src/vserv_crank0.cpp
   src/vserv_helpers.cpp
   src/vserv_helpers_plat.cpp

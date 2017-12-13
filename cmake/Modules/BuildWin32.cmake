@@ -1,6 +1,7 @@
 # other platform headers and sources (for dummylib)
 
 SET(GITTEST_PLAT_HEADERS_NIX
+  include/gittest/systemd_helpers.h
   include/gittest/vserv_crank0_priv.h
   include/gittest/vserv_helpers_plat.h
   include/gittest/vserv_mgmt_priv.h
@@ -8,6 +9,7 @@ SET(GITTEST_PLAT_HEADERS_NIX
   ${GITTEST_COMMON_HEADERS_NIX}
 )
 SET(GITTEST_PLAT_SOURCES_NIX
+  src/systemd_helpers.cpp
   src/vserv_crank0.cpp
   src/vserv_helpers_plat.cpp
   src/vserv_mgmt.cpp
